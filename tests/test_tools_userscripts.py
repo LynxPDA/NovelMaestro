@@ -309,9 +309,24 @@ def test_rulate_panel_invariants():
     assert 'Плана нет — выберите файл с главами' in text, \
         "пустое состояние плана говорит не про файл с главами"
 
-    # список глав строится сразу, а не по раскрытию
-    assert "fillSelect(select, row);" in text, "список глав не заполняется при построении плана"
-    assert "dataset.filled" not in text, "вернулась ленивая подгрузка списка по раскрытию"
+    # все строки плана сразу, без порций по 60
+    assert "const rows = shown;" in text, "план снова режется порциями"
+    assert "planState.limit" not in text, "вернулось ограничение числа строк плана"
+    assert "показано ${shown} из" not in text, "счётчик снова про порции, а не про число строк"
+
+    # полный список главы достраивается по требованию, а не в каждой строке сразу
+    assert "function scheduleFill(select, row)" in text, "нет достройки списка по требованию"
+    assert "scheduleFill(select, row);" in text, "список главы не достраивается при обращении"
+    assert "select.dataset.filled === '1'" in text, "нет отметки, что список уже достроен"
+    assert "select.addEventListener('focus', fill, { once: true });" in text, \
+        "список не достраивается по фокусу"
+    assert "select.addEventListener('pointerenter', fill, { once: true });" in text, \
+        "список не достраивается при наведении"
+
+    # кэш грамм названий: одна и та же строка сравнивается с каждой главой книги
+    assert "function gramsCached(text, nMax, cache)" in text, "граммы названий считаются на каждую пару"
+    assert "chrf(gramsCached(A, 3, titleGramCache), B, 3, 3, gramsCached(B, 3, titleGramCache))" in text, \
+        "кэш грамм не используется в оценке названий"
     assert "if (group.length > 1) b.list = group;" in text, \
         "кандидаты снова только у спорных строк"
     assert not re.search(r"localStorage\.setItem\(storeKey", text), \

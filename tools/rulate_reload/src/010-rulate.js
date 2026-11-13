@@ -102,22 +102,46 @@ function firstDiff(a, b) {
    Объём сознательно не мерится: у разных глав одного автора длина сходится
    на 0.72-0.92, и как признак «та ли глава» отношение длин не работает;
    обрезанный файл ловится самим chrF (10% текста — около 0.11). */
-function chrf(a, b, nMax, beta) {
+/* Граммы строки при заданном n. Пробелы выкидываются: для текста на письме
+   без пробелов и для названий счёт остаётся одним и тем же. */
+function ngramsOf(text, n) {
+  const s = String(text || '').replace(/\s+/g, '');
+  const m = new Map();
+  for (let i = 0; i + n <= s.length; i++) {
+    const g = s.slice(i, i + n);
+    m.set(g, (m.get(g) || 0) + 1);
+  }
+  return m;
+}
+
+/* Граммы строки по порядку n = 1..nMax через кэш. План сравнивает одну строку
+   с каждой главой книги, и без кэша граммы книги пересчитывались на каждую
+   пару — это и была основная цена отрисовки (600 строк × 600 глав). */
+function gramsCached(text, nMax, cache) {
+  const key = String(text || '');
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const out = [];
+  for (let k = 1; k <= nMax; k++) out.push(ngramsOf(key, k));
+  cache.set(key, out);
+  return out;
+}
+
+/* chrF двух текстов. Тексты можно передать готовыми граммами (gramsCached) —
+   тогда они не считаются заново: план сравнивает одну строку с каждой главой
+   книги, и пара «строка × глава» повторяется сотни тысяч раз. */
+function chrf(a, b, nMax, beta, readyB) {
   const n = nMax || 6, b2 = (beta || 3) ** 2;
-  const ga0 = String(a || '').replace(/\s+/g, '');
-  const gb0 = String(b || '').replace(/\s+/g, '');
-  if (!ga0.length || !gb0.length) return 0;
+  const ready = Array.isArray(a) ? a : null;
+  const readyRight = Array.isArray(readyB) ? readyB : null;
+  const ga0 = ready ? '' : String(a || '').replace(/\s+/g, '');
+  const gb0 = readyRight ? '' : String(b || '').replace(/\s+/g, '');
+  if (!readyRight && !gb0.length) return 0;
+  if (!ready && !ga0.length) return 0;
   let total = 0;
   for (let k = 1; k <= n; k++) {
-    const ga = new Map(), gb = new Map();
-    for (let i = 0; i + k <= ga0.length; i++) {
-      const g = ga0.slice(i, i + k);
-      ga.set(g, (ga.get(g) || 0) + 1);
-    }
-    for (let i = 0; i + k <= gb0.length; i++) {
-      const g = gb0.slice(i, i + k);
-      gb.set(g, (gb.get(g) || 0) + 1);
-    }
+    const ga = ready ? (ready[k - 1] || new Map()) : ngramsOf(ga0, k);
+    const gb = readyRight ? (readyRight[k - 1] || new Map()) : ngramsOf(gb0, k);
     let inter = 0;
     for (const [g, c] of ga) if (gb.has(g)) inter += Math.min(c, gb.get(g));
     let totalA = 0, totalB = 0;
@@ -585,9 +609,17 @@ function progressText(done, total, samples) {
 
    n до 3: у названия 2–5 слов, и длинные n-граммы делают счёт шумным
    (правка одного предлога при n=6 давала бы 0.37 против 0.60). */
+/* Кэш грамм названий общий на все строки плана: одну и ту же строку файла
+   сравнивают с каждой главой книги, а названия глав — между собой у разных
+   строк. Ключ — нормализованный текст. */
+const titleGramCache = new Map();
+
 function titleScore(a, b) {
-  const norm = (t) => String(t || '').normalize('NFC').toLowerCase().trim();
-  return chrf(norm(a), norm(b), 3);
+  /* Обе стороны — из кэша: названия глав сайта сравниваются со всеми строками
+     файла, и пересчёт грамм одной стороны на каждую пару и был той самой
+     медленной частью. */
+  const A = titleNorm(a), B = titleNorm(b);
+  return chrf(gramsCached(A, 3, titleGramCache), B, 3, 3, gramsCached(B, 3, titleGramCache));
 }
 
 /* Кандидаты для спорной строки, отсортированные по похожести названия.
@@ -1491,6 +1523,28 @@ dropLegacyPlanStore();
 /* ---------- таблица плана ---------- */
 const allSiteOptions = () => (site ? site.ordered : []).map(g => ({ id: String(g.chapterId), title: g.siteTitle, url: g.url }));
 
+/* Достройка «всей книги» в списке строки.
+
+   Полный список для каждой строки сразу — это (строки × главы) элементов: на
+   600 главах 363 тысячи. Строить их при перерисовке бессмысленно вдвойне:
+   столько одновременно не открывают, а живут такие элементы до следующей
+   перерисовки. Поэтому список достраивается по требованию (фокус, наведение,
+   раскрытие) — и только он. */
+const pendingFill = new Set();
+
+function scheduleFill(select, row) {
+  const fill = () => {
+    if (select.dataset.filled === '1') return;
+    select.dataset.filled = '1';
+    pendingFill.delete(select);
+    fillSelect(select, row);
+  };
+  select.addEventListener('focus', fill, { once: true });
+  select.addEventListener('pointerenter', fill, { once: true });
+  select.addEventListener('pointerdown', fill, { once: true });
+  select.addEventListener('change', fill, { once: true });
+}
+
 /* Первые варианты строки: выбранная глава и кандидаты по номеру, ближайшие
    по названию сверху; следом — вся книга (fillSelect).
 
@@ -1516,10 +1570,8 @@ function planRowClass(row, rangeOut) {
   return row.host && String(row.host) !== String(row.fi) ? 'ru-pr-issue' : '';
 }
 
-/* Состояние отрисовки: сколько строк материализовано и до какого предела.
-   Порция растёт по прокрутке; больше limit не строим — иначе «показать все»
-   на книге в тысячу глав снова упрётся в те же секунды. */
-const planState = { limit: 60, PAGE: 60, open: false };
+/* Состояние отрисовки: сколько строк показано и открыта ли панель. */
+const planState = { shown: 0, total: 0, open: false };
 
 /* Покраска одной строки: статус, chrF и цвет. Отдельно от построения DOM,
    потому что после ручного выбора меняется ровно эта строка. */
@@ -1552,19 +1604,11 @@ function refreshRow(row, tr, select) {
   if (select) select.title = row.site ? 'Глава на сайте: id=' + row.site.chapterId : 'Глава на сайте не определена — выберите';
 }
 
-/* Счётчик под таблицей: сколько показано, сколько всего и сколько выделено.
-   Клик по нему показывает все строки разом — осознанное действие, а не
-   побочный эффект открытия панели. */
+/* Счётчик под таблицей: сколько строк в текущем фильтре. */
 function updateFoot(shownCount) {
   const foot = $('ru-plan-foot');
   if (!foot) return;
-  const shown = shownCount != null ? shownCount : (planState.shown || 0);
-  const more = planState.total != null ? Math.max(0, planState.total - shown) : 0;
-  foot.textContent = `показано ${shown} из ${planState.total != null ? planState.total : shown} строк`
-    + (more ? ` · ещё ${more} — потяните прокрутку` : '')
-    ;
-  foot.title = more ? 'Показать все строки сразу' : '';
-  foot.onclick = more ? () => { planState.limit = 0; renderPlan(); } : null;
+  foot.textContent = `строк: ${shownCount != null ? shownCount : (planState.shown || 0)}`;
 }
 
 function renderPlan() {
@@ -1598,11 +1642,11 @@ function renderPlan() {
     + `, проблемных ${plan.problems.length}`
     + (rangeSet ? ` · в диапазоне ${c.work}, вне ${c.total - c.work}` : '');
 
-  /* Список рисуется порциями: у книги бывает больше тысячи глав, и построить
-     их все разом — это секунды на каждое нажатие. Видимые строки появляются
-     сразу, остальные — по прокрутке (или целиком по клику на счётчик). */
-  const limit = planState.limit;
-  const rows = limit ? shown.slice(0, limit) : shown;
+  /* Все строки сразу и с полными списками глав. Порции были нужны, пока
+     граммы названий считались на каждую пару «строка × глава» — это секунды
+     на перерисовку. С кэшем грамм это доли секунды, а прокрутка к концу книги
+     ради очередной порции — лишний шаг на каждой правке. */
+  const rows = shown;
   planState.total = shown.length;
   planState.shown = rows.length;
 
@@ -1651,10 +1695,12 @@ function renderPlan() {
     }
     if (cands.length) select.appendChild(grp);
 
-    /* Вся книга — сразу и целиком. Ленивое дополнение по раскрытию экономило
-       построение, но заставляло раскрывать каждый список по очереди, чтобы
-       пройти по главам; полноценный список у строки нужен с первого взгляда. */
-    fillSelect(select, row);
+    /* Список открывают — тогда и достраивается вся книга. Строить её в каждой
+       из сотен строк сразу значит 363 тысячи элементов на 600 главах: столько
+       не рисуется, а выбрасывается при первой же перерисовке. Кандидаты (и
+       назначенная глава) уже в списке, поэтому обычный путь — выбрать из них,
+       а «вся книга» нужна, только когда нужной главы среди них нет. */
+    scheduleFill(select, row);
 
     select.onchange = () => {
       /* «Не выбрана» — тот же результат, что раньше давала кнопка «Снять»:
@@ -1715,18 +1761,6 @@ function renderPlan() {
   updateFoot(rows.length);
   $('ru-start').disabled = parsed.length === 0;
 }
-
-/* Прокрутка до низа списка дорисовывает следующую порцию: страница
-   открывается быстро, а до конца книги человек доходит сам. Слушатель один
-   на список и живёт вне renderPlan — иначе их накапливалось бы по одному на
-   каждую перерисовку. */
-$('ru-plan-list').addEventListener('scroll', (e) => {
-  const el = e.currentTarget;
-  if (!planState.limit || planState.shown >= planState.total) return;
-  if (el.scrollTop + el.clientHeight < el.scrollHeight - 80) return;
-  planState.limit = planState.shown + planState.PAGE;
-  renderPlan();
-});
 
 /* ---------- построение плана ---------- */
 async function refreshPlan() {
