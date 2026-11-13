@@ -33,7 +33,9 @@ const CFG = {
   delayMs: 2100,
   jitterMs: 0,
   intraMs: 400,
-  verify: true,
+  /* Проверка после записи по умолчанию выключена: это второй проход по
+     каждой главе, а сверка chrF перед записью уже отсекает чужую главу. */
+  verify: false,
   skipSame: true,
   multiFragment: 'skip',
   diffCtx: 40,
@@ -688,18 +690,6 @@ function collectOverrides(plan, parsed) {
   return out;
 }
 
-/* Пакетные действия по выделению — то же решение, что и выбор в строке, но
-   разом. Возвращают счётчик изменённых строк, чтобы интерфейс сказал итог. */
-function planSkipSelected(plan, fis) {
-  let n = 0;
-  for (const fi of fis) {
-    const row = planRow(plan, fi);
-    if (!row || row.how.startsWith('пропуск (ваше')) continue;
-    planAssign(plan, fi, null);
-    n++;
-  }
-  return n;
-}
 
 /* «Сбросить»: вернуть строку к тому, что решил бы скрипт сам. Решение берём
    у planMatches — второго алгоритма сопоставления быть не должно, иначе
@@ -725,38 +715,6 @@ function planResetSelected(plan, parsed, fis) {
   return fis.length;
 }
 
-/* Черновое выравнивание по порядку — предложение, а не решение. Нужно, когда
-   нумерация разъехалась (второй том начали с единицы, файл перекомпилировали):
-   якоря — строки, уже сопоставленные по названию, между ними позиции
-   выравниваются по порядку оглавления. Ничего не пишется, пока человек не
-   нажал «Старт», и каждая предложенная строка помечена `по порядку (черновик)`. */
-function planAlignByOrder(plan) {
-  const anchors = plan.rows
-    .map((row, idx) => ({ row, idx, at: (plan.site.ordered || []).findIndex(g => row.site && String(g.chapterId) === String(row.site.chapterId)) }))
-    .filter(a => a.at >= 0);
-  if (!anchors.length) return { suggested: 0, note: 'нет ни одной строки, сопоставленной по названию, — выравнивать не от чего' };
-
-  let suggested = 0;
-  for (let i = 0; i < anchors.length - 1; i++) {
-    const a = anchors[i], b = anchors[i + 1];
-    const gapRows = plan.rows.filter(r => !r.site && r.fi > a.row.fi && r.fi < b.row.fi);
-    const gapSite = (plan.site.ordered || []).slice(a.at + 1, b.at);
-    if (!gapRows.length || !gapSite.length || gapRows.length !== gapSite.length) continue;
-    gapRows.forEach((row, k) => {
-      const g = gapSite[k];
-      planAssign(plan, row.fi, String(g.chapterId));
-      plan.manual[row.fi] = String(g.chapterId);
-      row.how = 'по порядку (черновик)';
-      suggested++;
-    });
-  }
-  resolveConflicts(plan, plan.rangeSet);
-  return {
-    suggested,
-    note: suggested ? `выровнено ${suggested} строк между якорями — проверьте их глазами` : 'свободных промежутков одинаковой длины нет',
-  };
-}
-
 /* ---------- план в файл и обратно ---------- */
 function planToData(plan, parsed) {
   const occupied = new Set(plan.rows.filter(r => r.site).map(r => String(r.site.chapterId)));
@@ -776,67 +734,6 @@ function planToData(plan, parsed) {
     unused: (plan.site.ordered || []).filter(g => !occupied.has(String(g.chapterId)))
       .map(g => ({ id: String(g.chapterId), title: g.siteTitle })),
   };
-}
-
-/* Чужой файл не должен ломать панель: разбираем терпимо, а всё, чего нет в
-   книге, отдаём отчётом. Строки ищутся по названию, затем по номеру —
-   индексы из чужого файла не значат ничего. */
-function planFromData(data, parsed, site) {
-  const notes = [];
-  const overrides = {};
-  if (!data || typeof data !== 'object') return { overrides, notes: ['это не файл плана'], book: null };
-  const book = data.book ? String(data.book) : null;
-  if (data.app !== 'NovelMaestro rulate plan') return { overrides, notes: ['в файле нет отметки «NovelMaestro rulate plan»'], book };
-
-  const rows = Array.isArray(data.rows) ? data.rows.filter(r => r && typeof r === 'object') : [];
-  if (!rows.length) return { overrides, notes: ['в файле нет ни одной строки'], book };
-
-  const siteIds = new Set((site.ordered || []).map(g => String(g.chapterId)));
-  const siteTitles = new Map((site.ordered || []).map(g => [titleNorm(g.siteTitle), String(g.chapterId)]));
-  const used = new Set();
-
-  parsed.forEach((ch) => {
-    if (ch.problem) return;
-    let src = rows.find(r => !used.has(r) && titleNorm(r.title) === titleNorm(ch.title));
-    if (!src && ch.num != null) src = rows.find(r => !used.has(r) && r.num === ch.num);
-    if (!src) return;
-    used.add(src);
-
-    if (!src.site || src.site.id == null) {
-      /* Пропуск запоминается только как явное «не лить»: в плане такие строки
-         помечены «пропуск (ваше решение)». Строка, которой просто не нашлось
-         главы на сайте, решением человека не является — её не записываем, иначе
-         после импорта «не найдена» превратилась бы в «вы её сняли». */
-      if (src.site === null && String(src.how || '').startsWith('пропуск (ваше')) {
-        overrides[overrideKey(ch)] = null;
-      }
-      return;
-    }
-    let id = String(src.site.id);
-    if (!siteIds.has(id)) {
-      const byName = siteTitles.get(titleNorm(src.site.title || ''));
-      if (!byName) { notes.push(`«${ch.title}»: главы id=${id} на сайте нет — строка осталась как решил скрипт`); return; }
-      notes.push(`«${ch.title}»: главы id=${id} нет, взята по названию id=${byName}`);
-      id = byName;
-    }
-    overrides[overrideKey(ch)] = id;
-  });
-
-  const missed = rows.filter(r => !used.has(r) && r.site).length;
-  if (missed) notes.push(`в файле плана ${missed} строк (глав) не нашлось в этом .txt`);
-  if (book && book !== String(bookIdFromUrl())) notes.push(`план от книги #${book}, а открыта #${bookIdFromUrl()}`);
-  return { overrides, notes, book };
-}
-
-function planToText(plan, parsed) {
-  const lines = ['# План заливки: глава файла → глава сайта', '#'];
-  for (const row of plan.rows) {
-    const label = (row.num != null ? row.num + '. ' : '-. ') + row.title;
-    const target = row.site ? `«${row.site.siteTitle}» (id=${row.site.chapterId})` : '—';
-    lines.push(`${label}\t${target}\t${row.how}${row.host ? ` (глава сайта занята строкой ${row.host})` : ''}`);
-  }
-  for (const fi of plan.problems) lines.push(`${parsed[fi].title}\t—\t${parsed[fi].problem}`);
-  return lines.join('\n') + '\n';
 }
 
 /* ---------- заливка по плану ---------- */
@@ -1086,7 +983,7 @@ panel.id = 'ru-bulk';
 /* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
    innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
    значения CFG здесь единственные данные, но правило одно на весь файл). */
-const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> <span class="ru-muted" id="ru-range-hint"></span> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <label title="Показать только спорные и ненайденные строки"><input type="checkbox" id="ru-plan-issues"> только спорные</label> <label title="Оставить в списке только выбранные строки"><input type="checkbox" id="ru-plan-only"> только выделенные</label> <button class="ru-sec" id="ru-plan-skip" title="Отметить выделенные строки как «не лить»">Снять</button> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> <button class="ru-sec" id="ru-plan-align" title="Черновое выравнивание по порядку оглавления (когда нумерация разъехалась)">По порядку</button> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные главы и сверить текст (chrF)">Проверить</button> <button class="ru-sec" id="ru-plan-save" title="Сохранить план в JSON — его можно поправить и загрузить обратно">Экспорт</button> <button class="ru-sec" id="ru-plan-load" title="Загрузить план из JSON">Импорт</button> <input type="file" id="ru-plan-file" accept="application/json,.json" style="display:none"> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> <span class="ru-muted" style="margin-left:6px" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span> <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 или пусто — сверка выключена."> </div> <div class="ru-row"> <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div> <div class="ru-grip ru-grip-nw" id="ru-grip-nw" title="Потяните за угол: размер и положение"></div> <div class="ru-grip" id="ru-grip" title="Потяните, чтобы изменить размер панели"></div>`;
+const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> <span class="ru-muted" id="ru-range-hint"></span> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <label title="Показать только спорные и ненайденные строки"><input type="checkbox" id="ru-plan-issues"> только спорные</label> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные строки и сверить текст (chrF)">Проверить</button> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> <span class="ru-muted" style="margin-left:6px" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span> <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 или пусто — сверка выключена."> </div> <div class="ru-row"> <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div> <div class="ru-grip ru-grip-nw" id="ru-grip-nw" title="Потяните за угол: размер и положение"></div> <div class="ru-grip" id="ru-grip" title="Потяните, чтобы изменить размер панели"></div>`;
 {
   const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
   for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
@@ -1146,11 +1043,14 @@ function loadPlanLocal() {
 /* ---------- таблица плана ---------- */
 const allSiteOptions = () => (site ? site.ordered : []).map(g => ({ id: String(g.chapterId), title: g.siteTitle, url: g.url }));
 
+/* Первые варианты строки: выбранная глава и кандидаты по номеру, ближайшие
+   по названию сверху.
+
+   Полный список книги здесь сознательно НЕ строится: `<option>` на каждую
+   главу в каждой строке — это (строки × главы) элементов, у книги на 600
+   глав их выходило 360 тысяч, и один клик по чекбоксу занимал семь секунд.
+   Весь список появляется при открытии конкретного `<select>` (fillSelect). */
 function candOptions(row) {
-  /* Кандидаты по номеру идут по похожести названия — человек сразу видит
-     ближайшую по смыслу, а не ту, что случайно оказалась первой в оглавлении.
-     Дальше — сам план и соседи по оглавлению: они нужны, когда нумерация
-     разъехалась и верная глава вообще не имеет этого номера. */
   const out = [];
   const seen = new Set();
   const push = (g, score) => {
@@ -1161,11 +1061,40 @@ function candOptions(row) {
   };
   if (row.site) push({ chapterId: row.site.chapterId, siteTitle: row.site.siteTitle });
   for (const c of rankCandidates(row.title, row.cands)) push(c, c.score);
+  return out;
+}
+
+/* Весь список книги в этом `<select>`: строится один раз, при первом
+   раскрытии. Порядок — как в оглавлении; уже предложенные варианты не
+   дублируются. Соседи по оглавлению поднимаются наверх: когда нумерация
+   разъехалась, верная глава обычно рядом. */
+function fillSelect(select, row) {
+  if (select.dataset.filled) return;
+  select.dataset.filled = '1';
   const all = allSiteOptions();
-  const at = all.findIndex(g => row.site && g.id === String(row.site.chapterId));
-  const anchor = at >= 0 ? at : -1;
-  for (const d of [1, -1, 2, -2]) if (anchor >= 0 && all[anchor + d]) push({ chapterId: all[anchor + d].id, siteTitle: all[anchor + d].title });
-  return { list: out, all };
+  const have = new Set([...select.querySelectorAll('option')].map(o => o.value));
+  const anchor = row.site ? all.findIndex(g => g.id === String(row.site.chapterId)) : -1;
+  const near = [];
+  for (const d of [1, -1, 2, -2]) if (anchor >= 0 && all[anchor + d] && !have.has(all[anchor + d].id)) near.push([all[anchor + d], d > 0 ? 'соседняя дальше' : 'соседняя выше']);
+  if (near.length) {
+    const g = document.createElement('optgroup');
+    g.label = 'рядом по оглавлению';
+    for (const [it] of near) g.appendChild(optionFor({ id: it.id, title: it.title }));
+    select.appendChild(g);
+  }
+  const gAll = document.createElement('optgroup');
+  gAll.label = `вся книга (${all.length})`;
+  for (const it of all) if (!have.has(it.id)) gAll.appendChild(optionFor({ id: it.id, title: it.title }));
+  select.appendChild(gAll);
+}
+
+function optionFor(c) {
+  const o = document.createElement('option');
+  o.value = c.id;
+  const sc = c.score != null && c.score >= TITLE_SIMILAR_MIN ? ` · ${c.score.toFixed(2)}` : '';
+  o.textContent = `«${c.title}» · id=${c.id}${sc}`;
+  if (c.score != null) o.style.color = c.score >= 0.6 ? '#7fe39a' : c.score >= 0.45 ? '#ffd166' : '';
+  return o;
 }
 
 function planRowClass(row, rangeOut) {
@@ -1175,14 +1104,57 @@ function planRowClass(row, rangeOut) {
   return row.host && String(row.host) !== String(row.fi) ? 'ru-pr-issue' : '';
 }
 
+/* Состояние отрисовки: сколько строк материализовано и до какого предела.
+   Порция растёт по прокрутке; больше limit не строим — иначе «показать все»
+   на книге в тысячу глав снова упрётся в те же секунды. */
+const planState = { limit: 60, PAGE: 60, open: false };
+
+/* Покраска одной строки: статус, chrF и цвет. Отдельно от построения DOM,
+   потому что после ручного выбора меняется ровно эта строка. */
+function paintRow(row, tr, chrfEl, statusEl, rangeSet) {
+  const rep = reports.get(row.fi);
+  const verdict = rep && rep.chrf != null ? chrfVerdict(rep.chrf) : 'off';
+  chrfEl.textContent = rep && rep.chrf != null ? rep.chrf.toFixed(2) : '';
+  chrfEl.className = 'ru-pr-chrf' + (verdict === 'good' ? ' ru-good' : verdict === 'bad' ? ' ru-bad' : '');
+  const rangeOut = planRowRange(row, rangeSet);
+  let hint = '';
+  if (!row.site && row.cands.length) {
+    const best = rankCandidates(row.title, row.cands)[0];
+    if (best && best.score >= TITLE_SIMILAR_MIN) hint = ` · ближе «${best.siteTitle || best.title}»`;
+  }
+  statusEl.textContent = (rep ? rep.status : row.how) + hint + (rangeOut ? ' · ' + rangeOut : '');
+  statusEl.title = statusEl.textContent;
+  tr.className = 'ru-plan-row ' + planRowClass(row, rangeOut !== '');
+}
+
+function refreshRow(row, tr, select) {
+  if (!tr) return;
+  paintRow(row, tr, tr.querySelector('.ru-pr-chrf'), tr.querySelector('.ru-pr-status'), plan.rangeSet || null);
+  if (select) select.title = row.site ? 'Глава на сайте: id=' + row.site.chapterId : 'Глава на сайте не определена — выберите';
+}
+
+/* Счётчик под таблицей: сколько показано, сколько всего и сколько выделено.
+   Клик по нему показывает все строки разом — осознанное действие, а не
+   побочный эффект открытия панели. */
+function updateFoot(shownCount) {
+  const foot = $('ru-plan-foot');
+  if (!foot) return;
+  const shown = shownCount != null ? shownCount : (planState.shown || 0);
+  const more = planState.total != null ? Math.max(0, planState.total - shown) : 0;
+  foot.textContent = `показано ${shown} из ${planState.total != null ? planState.total : shown} строк`
+    + (more ? ` · ещё ${more} — потяните прокрутку` : '')
+    + ` · выделено ${selected.size}`;
+  foot.title = more ? 'Показать все строки сразу' : '';
+  foot.onclick = more ? () => { planState.limit = 0; renderPlan(); } : null;
+}
+
 function renderPlan() {
   const box = $('ru-plan-box');
   const list = $('ru-plan-list');
-  if (!plan) { box.style.display = 'none'; return; }
+  if (!plan || !planState.open) { box.style.display = 'none'; return; }
   box.style.display = '';
 
   const onlyIssues = $('ru-plan-issues').checked;
-  const onlySel = $('ru-plan-only').checked;
   const rangeSet = plan.rangeSet || null;
   /* «только спорные» — строки, которые ещё требуют решения. Только что
      назначенная руками строка остаётся видимой до переключения фильтра:
@@ -1190,25 +1162,37 @@ function renderPlan() {
      диапазона в этом прогоне не пишется, поэтому в «спорные» не попадает:
      беспокоиться о ней незачем. */
   const needsDecision = (r) => planRowRange(r, rangeSet) === '' && (!r.site || (r.host && String(r.host) !== String(r.fi)));
-  const rows = plan.rows.filter(r => (onlySel ? selected.has(r.fi) : true)
-    && (onlyIssues ? needsDecision(r) || touched.has(r.fi) : true));
+  const shown = plan.rows.filter(r => (onlyIssues ? needsDecision(r) || touched.has(r.fi) : true));
 
-  const inWork = plan.rows.filter(r => planRowRange(r, rangeSet) === '');
-  const out = plan.rows.length - inWork.length;
-  const ok = inWork.filter(r => r.site && !(r.host && String(r.host) !== String(r.fi))).length;
-  const ambiguous = inWork.filter(r => !r.site && r.cands.length).length;
-  const none = inWork.filter(r => !r.site && !r.cands.length).length;
-  const manual = inWork.filter(r => r.how === 'вручную').length;
-  $('ru-plan-stat').textContent = `План: сопоставлено ${ok}, спорных ${ambiguous}, не найдено ${none}`
-    + (manual ? `, вручную ${manual}` : '')
+  /* Счётчики — один проход по плану, а не пять: на семистах строках разница
+     не видна, но проходов было ровно столько, сколько чисел в заголовке. */
+  const c = { total: plan.rows.length, work: 0, ok: 0, ambiguous: 0, none: 0, manual: 0 };
+  for (const r of plan.rows) {
+    if (planRowRange(r, rangeSet) !== '') continue;
+    c.work++;
+    if (r.site) { if (!(r.host && String(r.host) !== String(r.fi))) c.ok++; }
+    else if (r.cands.length) c.ambiguous++;
+    else c.none++;
+    if (r.how === 'вручную') c.manual++;
+  }
+  $('ru-plan-stat').textContent = `План: сопоставлено ${c.ok}, спорных ${c.ambiguous}, не найдено ${c.none}`
+    + (c.manual ? `, вручную ${c.manual}` : '')
     + `, проблемных ${plan.problems.length}`
-    + (rangeSet ? ` · в диапазоне ${inWork.length}, вне ${out}` : '');
+    + (rangeSet ? ` · в диапазоне ${c.work}, вне ${c.total - c.work}` : '');
+
+  /* Список рисуется порциями: у книги бывает больше тысячи глав, и построить
+     их все разом — это секунды на каждое нажатие. Видимые строки появляются
+     сразу, остальные — по прокрутке (или целиком по клику на счётчик). */
+  const limit = planState.limit;
+  const rows = limit ? shown.slice(0, limit) : shown;
+  planState.total = shown.length;
+  planState.shown = rows.length;
 
   list.textContent = '';
   if (!rows.length) {
     const empty = document.createElement('div');
     empty.className = 'ru-plan-row ru-pr-none';
-    empty.textContent = (onlyIssues || onlySel) ? 'Строк по фильтру нет.' : 'Строк нет.';
+    empty.textContent = onlyIssues ? 'Строк по фильтру нет.' : 'Строк нет.';
     list.appendChild(empty);
   }
 
@@ -1216,8 +1200,14 @@ function renderPlan() {
     const sel = document.createElement('input');
     sel.type = 'checkbox';
     sel.checked = selected.has(row.fi);
-    sel.title = 'Выделить строку (для «только выделенные» и «Проверить»)';
-    sel.onchange = () => { if (sel.checked) selected.add(row.fi); else selected.delete(row.fi); renderPlan(); };
+    sel.title = 'Выделить строку (для «Проверить» и счётчика)';
+    /* Клик по чекбоксу не перерисовывает таблицу: перерисовка снесла бы
+       DOM под курсором и на семистах строках стоила бы секунды. Меняются
+       только счётчик и собственная строка. */
+    sel.onchange = () => {
+      if (sel.checked) selected.add(row.fi); else selected.delete(row.fi);
+      updateFoot();
+    };
 
     const num = document.createElement('span');
     num.className = 'ru-pr-num';
@@ -1242,82 +1232,66 @@ function renderPlan() {
     noneOpt.textContent = '— не выбрана —';
     select.appendChild(noneOpt);
 
-    const { list: cands, all } = candOptions(row);
+    const cands = candOptions(row);
     const grp = document.createElement('optgroup');
     grp.label = 'кандидаты (ближайшие по названию сверху)';
     for (const c of cands) {
-      const o = document.createElement('option');
-      o.value = c.id;
-      /* Счёт показываем только у кандидатов по номеру: у соседей по
-         оглавлению его нет, и 0.00 рядом с ними читался бы как «плохо»,
-         хотя глава просто не сравнивалась. */
-      const sc = c.score != null && c.score >= TITLE_SIMILAR_MIN ? ` · ${c.score.toFixed(2)}` : '';
-      o.textContent = `«${c.title}» · id=${c.id}${sc}`;
-      if (c.score != null && c.score >= TITLE_SIMILAR_MIN) {
-        o.style.color = c.score >= 0.6 ? '#7fe39a' : c.score >= 0.45 ? '#ffd166' : '';
-      }
+      const o = optionFor(c);
       if (row.site && c.id === String(row.site.chapterId)) o.selected = true;
       grp.appendChild(o);
     }
     if (cands.length) select.appendChild(grp);
-
-    const grpAll = document.createElement('optgroup');
-    grpAll.label = 'вся книга';
-    for (const g of all) {
-      if (cands.some(c => c.id === g.id)) continue;
-      const o = document.createElement('option');
-      o.value = g.id;
-      o.textContent = `«${g.title}» · id=${g.id}`;
-      if (row.site && g.id === String(row.site.chapterId)) o.selected = true;
-      grpAll.appendChild(o);
-    }
-    select.appendChild(grpAll);
+    /* Ленивое дополнение: до первого раскрытия в списке только кандидаты.
+       Раскрыли — появился весь оглавление книги (fillSelect). */
+    let filled = false;
+    select.addEventListener('pointerdown', () => { fillSelect(select, row); filled = true; });
+    select.addEventListener('keydown', (e) => { if (!filled && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) { fillSelect(select, row); filled = true; } });
     select.onchange = () => {
+      /* «Не выбрана» — тот же результат, что раньше давала кнопка «Снять»:
+         строка не льётся. */
       const res = planAssign(plan, row.fi, select.value || null);
       if (!res.ok) log('Не назначено: ' + res.error, 'err');
       else {
         touched.add(row.fi);
         log(`Строка ${row.num != null ? row.num : '«' + row.title + '»'}: ${select.value ? 'глава сайта id=' + select.value : 'пропуск'} (вручную)`, 'plain');
+        savePlanLocal();
+        refreshRow(row, tr, select);
       }
-      savePlanLocal();
-      renderPlan();
     };
     cell.appendChild(select);
 
     const chrf = document.createElement('span');
-    const rep = reports.get(row.fi);
     chrf.className = 'ru-pr-chrf';
-    if (rep && rep.chrf != null) {
-      chrf.textContent = rep.chrf.toFixed(2);
-      const verdict = chrfVerdict(rep.chrf);
-      if (verdict !== 'off') chrf.classList.add(verdict === 'good' ? 'ru-good' : 'ru-bad');
-    } else chrf.textContent = '';
 
     const status = document.createElement('span');
     status.className = 'ru-pr-status';
-    const rangeOut = planRowRange(row, rangeSet);
-    /* У спорной строки в статусе — ближайшее название: одно слово рядом с
-       причиной отказа быстрее любого раскрытого списка. */
-    let hint = '';
-    if (!row.site && row.cands.length) {
-      const best = rankCandidates(row.title, row.cands)[0];
-      if (best && best.score >= TITLE_SIMILAR_MIN) hint = ` · ближе «${best.siteTitle || best.title}»`;
-    }
-    status.textContent = (rep ? rep.status : row.how) + hint + (rangeOut ? ' · ' + rangeOut : '');
-    status.title = status.textContent;
 
     const tr = document.createElement('div');
-    tr.className = 'ru-plan-row ' + planRowClass(row, rangeOut !== '');
+    tr.className = 'ru-plan-row ' + planRowClass(row, planRowRange(row, rangeSet) !== '');
     tr.append(sel, title, num, arrow, cell, chrf, status);
+    paintRow(row, tr, chrf, status, rangeSet);
     list.appendChild(tr);
   }
 
   const foot = document.createElement('div');
-  foot.className = 'ru-plan-row ru-pr-status';
-  foot.textContent = `${rows.length} из ${plan.rows.length} строк · выделено ${selected.size}`;
+  foot.className = 'ru-plan-row ru-pr-foot';
+  foot.id = 'ru-plan-foot';
   list.appendChild(foot);
+  updateFoot(rows.length);
   $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;
 }
+
+/* Прокрутка до низа списка дорисовывает следующую порцию: страница
+   открывается быстро, а до конца книги человек доходит сам. Слушатель один
+   на список и живёт вне renderPlan — иначе их накапливалось бы по одному на
+   каждую перерисовку. */
+$('ru-plan-list').addEventListener('scroll', (e) => {
+  const el = e.currentTarget;
+  if (!planState.limit || planState.shown >= planState.total) return;
+  if (el.scrollTop + el.clientHeight < el.scrollHeight - 80) return;
+  planState.limit = planState.shown + planState.PAGE;
+  renderPlan();
+});
 
 /* ---------- построение плана ---------- */
 async function refreshPlan() {
@@ -1405,17 +1379,16 @@ async function checkRows() {
 }
 
 /* ---------- события таблицы ---------- */
-$('ru-plan').onclick = () => refreshPlan();
-$('ru-plan-issues').onchange = () => { touched = new Set(); renderPlan(); };
-$('ru-plan-only').onchange = () => { touched = new Set(); renderPlan(); };
-$('ru-plan-check').onclick = () => checkRows();
-$('ru-plan-skip').onclick = () => {
-  if (!plan || !selected.size) { log('Выделите строки в таблице.', 'warn'); return; }
-  const n = planSkipSelected(plan, [...selected]);
-  log(`Снято выделенных строк: ${n}`, 'ok');
-  savePlanLocal();
-  renderPlan();
+/* «План» — переключатель: первое нажатие строит план, второе его прячет.
+   Повторная сборка не нужна ни при скрытии, ни при показе — оглавление уже
+   прочитано, а ручные правки живут в самом плане. */
+$('ru-plan').onclick = () => {
+  if (plan && planState.open) { planState.open = false; renderPlan(); return; }
+  planState.open = true;
+  if (!plan) refreshPlan(); else renderPlan();
 };
+$('ru-plan-issues').onchange = () => { touched = new Set(); renderPlan(); };
+$('ru-plan-check').onclick = () => checkRows();
 $('ru-plan-reset').onclick = () => {
   if (!plan || !selected.size) { log('Выделите строки в таблице.', 'warn'); return; }
   const n = planResetSelected(plan, parsed, [...selected]);
@@ -1423,49 +1396,6 @@ $('ru-plan-reset').onclick = () => {
   savePlanLocal();
   renderPlan();
 };
-$('ru-plan-align').onclick = () => {
-  if (!plan) { log('Сначала постройте план.', 'warn'); return; }
-  const res = planAlignByOrder(plan);
-  log('По порядку: ' + res.note, res.suggested ? 'warn' : 'plain');
-  savePlanLocal();
-  renderPlan();
-};
-$('ru-plan-save').onclick = () => {
-  if (!plan) { log('Сначала постройте план.', 'warn'); return; }
-  const data = planToData(plan, parsed);
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-  a.download = `rulate-plan-${data.book}.json`;
-  a.click();
-  log(`План выгружен: rulate-plan-${data.book}.json`, 'ok');
-  const a2 = document.createElement('a');
-  a2.href = URL.createObjectURL(new Blob([planToText(plan, parsed)], { type: 'text/plain;charset=utf-8' }));
-  a2.download = `rulate-plan-${data.book}.txt`;
-  a2.click();
-};
-$('ru-plan-load').onclick = () => $('ru-plan-file').click();
-$('ru-plan-file').addEventListener('change', (e) => {
-  const f = e.target.files[0];
-  e.target.value = '';
-  if (!f) return;
-  const rd = new FileReader();
-  rd.onload = () => {
-    let data;
-    try { data = JSON.parse(rd.result); } catch (err) { log('Это не JSON-файл плана: ' + err.message, 'err'); return; }
-    if (!site) {
-      log('Сначала нажмите «План» — импорт сверяется с оглавлением книги.', 'warn');
-      return;
-    }
-    const res = planFromData(data, parsed, site);
-    res.notes.forEach(n => log('   · ' + n, 'warn'));
-    if (!Object.keys(res.overrides).length) { log('Из файла нечего применить.', 'warn'); return; }
-    const applied = applyOverrides(plan, parsed, res.overrides);
-    log(`Импорт: назначено ${applied.assigned}, пропусков ${applied.skipped}` + (applied.lost ? `, потеряно ${applied.lost} (глав нет на сайте)` : ''), applied.lost ? 'warn' : 'ok');
-    savePlanLocal();
-    renderPlan();
-  };
-  rd.readAsText(f, 'utf-8');
-});
 
 /* ---------- панель: перетаскивание, размер и память панели ---------- */
 /* Размер и положение — предпочтения УСТРОЙСТВА, а не книги: панель
@@ -1648,7 +1578,7 @@ $('ru-file').addEventListener('change', (e) => {
     selected = new Set();
     reports = new Map();
     $('ru-plan-issues').checked = false;
-    $('ru-plan-only').checked = false;
+    planState.open = false;
     renderPlan();
     log(`Файл «${f.name}»: глав ${parsed.length} (валидных ${valid.length}).`, valid.length ? 'ok' : 'err');
     if (problems.length) {
@@ -1689,12 +1619,10 @@ async function launch(dryRun) {
   const rangeStr = $('ru-range').value.trim();
   if (plan) planSetRange(plan, rangeStr);
 
-  const onlySel = $('ru-plan-only').checked && selected.size > 0;
-  const onlyFi = onlySel ? [...selected] : null;
-  if (plan && selected.size && !$('ru-plan-only').checked) {
-    log(`Выделено ${selected.size} строк, но «только выделенные» не отмечено — пойдёт весь план.`, 'plain');
-  }
-  if (onlyFi) log(`Только выделенные строки: ${onlyFi.length}`, 'plain');
+  /* Выделение — это фильтр «что проверять», а не «что лить»: заливка идёт
+     по всему плану, а строку, которую лить не надо, отмечают «не выбрана». */
+  const onlyFi = null;
+  if (selected.size) log(`Выделено ${selected.size} строк (для «Проверить»); заливка идёт по всему плану.`, 'plain');
 
   $('ru-start').disabled = $('ru-dry').disabled = true;
   $('ru-stop').disabled = false;

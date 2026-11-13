@@ -87,8 +87,8 @@ function boot(site) {
   const api = new Function(
     'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
     BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, planMatches, run, chrf, looksLikeSameChapter,'
-      + ' buildPlan, planAssign, planToData, planFromData, planToText, applyOverrides, collectOverrides, writePlan,'
-      + ' planSkipSelected, planResetSelected, planAlignByOrder, parseChrfThreshold,'
+      + ' buildPlan, planAssign, applyOverrides, collectOverrides, writePlan, planResetSelected,'
+      + ' parseChrfThreshold,'
       + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange,'
       + ' titleCore, titleScore, rankCandidates, TITLE_SIMILAR_MIN };',
   )(
@@ -324,47 +324,6 @@ test('rulate: план переживает новый файл — ключ э�
   assert.equal(row.site.chapterId, '14', 'выбранная вручную глава сохранена');
 });
 
-test('rulate: экспорт и импорт плана возвращают то же решение', async () => {
-  const { api, parsed, plan, site } = await planFor(SITE_PLAN, [
-    '# [Глава 1. Новое название :|: 1]', 'н1', '',
-    '# [Глава 2. Вторая попытка :|: 2]', 'н2',
-  ]);
-  api.planAssign(plan, 0, '14');
-  const data = api.planToData(plan, parsed);
-  assert.equal(data.app, 'NovelMaestro rulate plan');
-  assert.equal(data.rows[0].site.id, '14');
-  assert.deepEqual(data.unused.map((g) => g.id).sort(), ['11', '15'],
-    'свободные главы сайта выгружаются подсказкой: занятые в план не попадают');
-
-  /* Импорт восстанавливает сопоставление целиком, а не только ручные правки:
-     файл плана — это и есть решение «что куда лить». */
-  const back = api.planFromData(data, parsed, site);
-  assert.deepEqual(back.overrides, {
-    '1|глава 1. новое название': '14',
-    '2|глава 2. вторая попытка': '12',
-  });
-  assert.deepEqual(back.notes, []);
-
-  // чужая книга/чужой файл — отчёт, а не молчание
-  const foreign = api.planFromData({ book: '999', rows: [] }, parsed, site);
-  assert.ok(foreign.notes.length > 0);
-  assert.equal(foreign.book, '999');
-  const garbage = api.planFromData({ hello: 1 }, parsed, site);
-  assert.ok(garbage.notes[0].includes('NovelMaestro rulate plan'));
-});
-
-test('rulate: импорт сверяет главы по названию, id лишь подсказка', async () => {
-  const { api, parsed, site } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
-  const data = {
-    app: 'NovelMaestro rulate plan', version: 1, book: String(BOOK),
-    rows: [{ num: 1, title: 'Глава 1. История', site: { id: '777', title: 'Глава 1. История' } }],
-  };
-  const res = api.planFromData(data, parsed, site);
-  assert.deepEqual(res.overrides, { '1|глава 1. история': '11' },
-    'после перезалива сайт выдал новые id — глава нашлась по названию');
-  assert.ok(res.notes.some((n) => n.includes('id=777')));
-});
-
 test('rulate: заливка идёт строго по плану, догадки не пересматриваются', async () => {
   const { api, posts, parsed, plan } = await planFor(SITE_PLAN, [
     '# [Глава 1. Новое название :|: 1]', 'н1', '',
@@ -407,59 +366,6 @@ test('rulate: «не найдена» в плане не превращаетс�
   assert.ok(logs.some((l) => l.includes('ОТКАЗ')));
 });
 
-test('rulate: текстовый план читается глазами и содержит решения', async () => {
-  const { api, parsed, plan } = await planFor(SITE_PLAN, [
-    '# [Глава 1. История :|: 1]', 'н1', '',
-    '# [Глава 2. Вторая попытка :|: 2]', 'н2',
-  ]);
-  api.planAssign(plan, 1, '14');
-  const text = api.planToText(plan, parsed);
-  assert.ok(text.includes('1. Глава 1. История\t«Глава 1. История» (id=11)'), text);
-  assert.ok(text.includes('2. Глава 2. Вторая попытка\t«Глава 1. Дополнительная глава» (id=14)\tвручную'), text);
-});
-
-test('rulate: «не найдена» из файла плана не становится «вашим решением»', async () => {
-  /* Строка без главы сайта — это НЕ решение человека. Если записать её как
-     «пропуск», после импорта ошибочный разбор скрипта закрепится, и строка
-     перестанет искаться в следующий раз. */
-  const { api, parsed, plan, site } = await planFor(SITE_PLAN,
-    ['# [Глава 1. История :|: 1]', 'н1', '', '# [Глава 9. Такой нет :|: 9]', 'н9']);
-  const missing = plan.rows.find((r) => r.num === 9);
-  assert.equal(missing.site, null);
-  assert.equal(missing.how, 'нет');
-
-  const data = api.planToData(plan, parsed);
-  const back = api.planFromData(data, parsed, site);
-  assert.deepEqual(back.overrides, { '1|глава 1. история': '11' },
-    'в файл плана попал только реальный пропуск — «нет» осталось «нет»');
-});
-
-test('rulate: явный пропуск строки переживает импорт', async () => {
-  const { api, parsed, plan, site } = await planFor(SITE_PLAN,
-    ['# [Глава 1. История :|: 1]', 'н1', '', '# [Глава 2. Вторая попытка :|: 2]', 'н2']);
-  api.planAssign(plan, 1, null); // человек снял главу
-  assert.equal(plan.rows[1].how, 'пропуск (ваше решение)');
-
-  const data = api.planToData(plan, parsed);
-  const back = api.planFromData(data, parsed, site);
-  assert.deepEqual(back.overrides, {
-    '1|глава 1. история': '11',
-    '2|глава 2. вторая попытка': null,
-  }, 'снятая человеком строка — это решение, его и надо помнить');
-});
-
-/* ── пакетные действия и черновое выравнивание ── */
-
-test('rulate: «снять выделенные» не трогает уже снятое и считает сделанное', async () => {
-  const { api, plan } = await planFor(SITE_PLAN, [
-    '# [Глава 1. История :|: 1]', 'н1', '',
-    '# [Глава 2. Вторая попытка :|: 2]', 'н2', '',
-  ]);
-  assert.equal(api.planSkipSelected(plan, [0, 1]), 2);
-  assert.equal(api.planSkipSelected(plan, [0, 1]), 0, 'повторное снятие ничего не делает');
-  assert.ok(plan.rows.every((r) => r.how.startsWith('пропуск (ваше')));
-});
-
 test('rulate: «сбросить» возвращает строку к решению скрипта', async () => {
   const site = [
     { id: 11, title: 'Глава 1. История', text: 'т' },
@@ -478,37 +384,6 @@ test('rulate: «сбросить» возвращает строку к реше
   assert.equal(plan.rows[1].site.chapterId, '13', 'вернулось решение скрипта');
   assert.equal(plan.rows[1].how, 'по номеру 3');
   assert.equal(Object.keys(api.collectOverrides(plan, parsed)).length, 0, 'ручная правка снята');
-});
-
-test('rulate: «по порядку» выравнивает промежуток между якорями', async () => {
-  // на сайте между якорями две главы, в файле — те же две без названий
-  const site = [
-    { id: 11, title: 'Глава 1. Начало', text: 'т' },
-    { id: 12, title: 'Глава 2. Середина', text: 'т' },
-    { id: 13, title: 'Глава 3. Ещё середина', text: 'т' },
-    { id: 14, title: 'Глава 4. Конец', text: 'т' },
-  ];
-  const { api, parsed, plan } = await planFor(site, [
-    '# [Глава 1. Начало :|: 1]', 'н1', '',
-    '# [Пролог :|: 0]', 'н2', '',
-    '# [Интерлюдия :|: 0]', 'н3', '',
-    '# [Глава 4. Конец :|: 4]', 'н4',
-  ]);
-  const res = api.planAlignByOrder(plan, parsed);
-  assert.equal(res.suggested, 2, 'две строки без номера встали по порядку между якорями');
-  const rows = plan.rows.filter((r) => r.how === 'по порядку (черновик)');
-  assert.deepEqual(rows.map((r) => r.site.chapterId), ['12', '13']);
-});
-
-test('rulate: «по порядку» молчит, если промежутки не совпадают по длине', async () => {
-  const { api, parsed, plan } = await planFor(SITE_PLAN, [
-    '# [Глава 1. История :|: 1]', 'н1', '',
-    '# [Пролог :|: 0]', 'н2', '',
-    '# [Глава 2. Вторая попытка :|: 2]', 'н3',
-  ]);
-  const res = api.planAlignByOrder(plan, parsed);
-  assert.equal(res.suggested, 0, 'одна строка против двух глав сайта — не выравниваем');
-  assert.ok(res.note.length > 0);
 });
 
 test('rulate: снятая вручную строка с кандидатами не считается неоднозначной', async () => {

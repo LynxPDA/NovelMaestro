@@ -219,11 +219,23 @@ def test_rulate_panel_invariants():
     assert "> Сверка главы<" not in text, "галочка сверки вернулась: переключатель один — порог chrF"
     assert 'id="ru-check-same"' not in text, "в панели вернулся чекбокс сверки главы"
     # порядок в строке плана: название главы, затем её номер
-    row = re.search(r"tr\.append\(([^)]*)\);\n\s*list\.appendChild\(tr\)", text)
+    row = re.search(r"tr\.append\(([^)]*)\);\n", text)
     assert row, "разметка строки плана не найдена"
     cells = [c.strip() for c in row.group(1).split(",")]
     assert cells.index("title") < cells.index("num"), \
         f"в строке плана первым должен идти номер: {cells}"
+    # снятые кнопки и чекбокс не должны вернуться в разметку
+    for gone in ('ru-plan-only', 'ru-plan-skip', 'ru-plan-align', 'ru-plan-save', 'ru-plan-load'):
+        assert f'id="{gone}"' not in text, f"в панели остался удалённый элемент {gone}"
+    # «План» — переключатель, а не «показать один раз»
+    assert "planState.open" in text and "if (plan && planState.open)" in text, \
+        "«План» снова не прячет таблицу"
+    # проверка результата по умолчанию выключена
+    assert "verify: false" in text, "«Проверять результат» снова включён по умолчанию"
+    # ленивый список: полный перечень книги строится при раскрытии
+    assert "function fillSelect" in text and "select.dataset.filled" in text, \
+        "весь список книги снова строится в каждом <select> при рендере"
+    assert "planState.limit" in text, "таблица снова рисуется целиком"
 
 
 def test_lite_modals_close_only_explicitly():
