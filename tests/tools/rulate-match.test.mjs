@@ -580,8 +580,9 @@ test('rulate: кандидаты отсортированы по похожес�
   assert.equal(ranked[0].chapterId, '12', 'ближайшее название — первым');
   assert.equal(ranked.length, 3, 'все кандидаты остаются, никто не выброшен');
   assert.equal(row.site, null, 'подбор по названию не назначает главу сам');
-  assert.ok(ranked[0].same, 'родственное название помечено как внятное');
-  assert.equal(ranked[ranked.length - 1].same, false, 'чужое название не притворяется похожим');
+  assert.ok(ranked[0].score >= api.TITLE_SIMILAR_MIN, 'родственное название проходит порог показа');
+  assert.ok(ranked[ranked.length - 1].score < api.TITLE_SIMILAR_MIN, 'чужое название за порогом');
+  assert.equal(ranked.length, row.cands.length, 'порог никого не выкидывает из списка');
 });
 
 test('rulate: счёт не показывается у непохожих названий', () => {
@@ -591,8 +592,8 @@ test('rulate: счёт не показывается у непохожих на�
     { chapterId: '12', siteTitle: 'Глава 9. Ещё о разном' },
   ];
   const ranked = api.rankCandidates('Глава 9. Битва у реки', site);
-  assert.ok(ranked.every((c) => !c.same), 'низкий счёт не выдаётся за похожесть');
-  assert.ok(ranked.every((c) => c.score < api.TITLE_SIMILAR_MIN));
+  assert.equal(ranked.length, site.length, 'непохожие кандидаты остаются в списке');
+  assert.ok(ranked.every((c) => c.score < api.TITLE_SIMILAR_MIN), 'низкий счёт не выдаётся за похожесть');
   // порог выше общего префикса: «Глава 9.» сама по себе даёт около 0.3,
   // и показывать её как «похожесть» значило бы врать
   assert.ok(api.TITLE_SIMILAR_MIN >= 0.5, 'порог не должен ловить совпадение одного префикса');

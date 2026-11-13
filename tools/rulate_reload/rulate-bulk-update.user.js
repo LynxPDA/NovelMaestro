@@ -535,13 +535,14 @@ function titleScore(a, b) {
    а chrF названий не различает «Тот, кто пришёл» и «Тот, кто ушёл» (0.87)
    от правки названия той же главы (0.75) с пригодным для автомата запасом.
    Поэтому все кандидаты остаются в списке, а человек видит, кто ближе.
-   `score` — для показа и порядка, `same` — показывать ли счёт. */
+   `score` — для порядка и для числа рядом с названием; порог показа решает
+   `optionFor`, второе правило «что считать похожим» здесь не заводится. */
 const TITLE_SIMILAR_MIN = 0.5;
 function rankCandidates(title, list) {
   return (list || [])
     .map((g) => ({ g, score: titleScore(title, g.siteTitle != null ? g.siteTitle : g.title) }))
     .sort((a, b) => b.score - a.score)
-    .map(({ g, score }) => ({ ...g, score, same: score >= TITLE_SIMILAR_MIN }));
+    .map(({ g, score }) => ({ ...g, score }));
 }
 
 /* ---------- план и его правка ---------- */
