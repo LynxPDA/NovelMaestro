@@ -13,7 +13,7 @@
 1. Установите расширение **Tampermonkey** (Chrome/Firefox/Edge).
 2. Поставьте скрипт по ссылке (менеджер покажет окно установки и будет обновлять по `@updateURL`, он указывает на `rulate-bulk-update.meta.js`) — `https://raw.githubusercontent.com/LynxPDA/NovelMaestro/main/tools/rulate_reload/rulate-bulk-update.user.js`; зеркало — `https://cdn.jsdelivr.net/gh/LynxPDA/NovelMaestro@main/tools/rulate_reload/rulate-bulk-update.user.js` (файлы ветки на CDN кэшируются на неделю, для проверки обновлений оно хуже).
 3. Или вручную: панель расширения → «Создать новый скрипт» → вставить содержимое `tools/rulate_reload/rulate-bulk-update.user.js` целиком → сохранить (Ctrl+S).
-4. Откройте книгу на Rulate: `https://tl.rulate.ru/book/<id>` — в правом нижнем углу появится панель **«RL · обновление глав v2.4»**.
+4. Откройте книгу на Rulate: `https://tl.rulate.ru/book/<id>` — в правом нижнем углу появится панель **«RL · обновление глав v2.5»**.
 
 Скрипт работает **от имени вашей учётки** (куки сайта), поэтому перед использованием залогиньтесь на Rulate в том же браузере. Блок `@connect` в баннере объявляет сам сайт (`self`, `rulate.ru`, `tl.rulate.ru`), `localhost` и `*` последним: запросы идут на тот же домен, где открыта книга, поэтому диалог разрешения на междоменный запрос обычно не появляется.
 
