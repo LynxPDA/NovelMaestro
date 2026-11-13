@@ -275,6 +275,40 @@ def test_rulate_panel_invariants():
         "остаток печатается без темпа: на старте будет «осталось 0 с»"
     assert "progressMarks.length = 0;" in text, "отметки темпа не сбрасываются перед прогоном"
 
+    # ── кнопка стоит после «Добавить главы» и в её оформлении ──
+    assert "function findAddChaptersButton()" in text, "нет поиска кнопки «Добавить главы»"
+    assert "addBtn.parentNode.insertBefore(toggleBtn, addBtn.nextSibling)" in text, \
+        "кнопка не встала сразу после «Добавить главы»"
+    assert "toggleBtn.className = addBtn.className || 'btn btn-default'" in text, \
+        "оформление не взято у кнопки сайта: размер шрифта разойдётся"
+
+    # ── таблица глав лежит внутри <form …/subscribe>: кнопки не должны её слать ──
+    assert "function disableFormSubmit(root)" in text, \
+        "нет простановки type=button: кнопка панели отправит форму и страница уедет"
+    assert "button:not([type])" in text, \
+        "кнопки внутри панели остаются submit-кнопками формы подписки"
+    assert "toggleBtn.type = 'button'" in text, "кнопка-переключатель отправляет форму"
+    assert "disableFormSubmit(panel);" in text, "кнопки панели не защищены от отправки формы"
+    assert "disableFormSubmit(document.body)" not in text, \
+        "правятся кнопки самого сайта: у Rulate есть кнопки без type, их поведение менять нельзя"
+
+    # ── лог: высоты хватает на шапку прогона ──
+    assert re.search(r"#ru-bulk \.ru-log-box \{[^}]*min-height: 220px", text), \
+        "лог снова низкий: строки запуска не помещаются"
+
+    # ── «Скачать лог» снята ──
+    assert 'id="ru-log-dl"' not in text, "вернулась кнопка «Скачать лог»"
+
+    # ── предупреждение о запуске в шапке ──
+    assert 'id="ru-run-warn"' in text, "в шапке нет предупреждения о запуске"
+    assert "не закрывайте окно и браузер" in text, "предупреждение не говорит, что окно закрывать нельзя"
+    assert '<path fill="currentColor"' in text, "у предупреждения нет жёлтого треугольника"
+    assert "function setBusy(on)" in text, "включение/выключение предупреждения не собрано в одном месте"
+    assert "$('ru-run-warn').hidden = !on;" in text, \
+        "предупреждение не привязано к запуску: останется после окончания"
+    assert text.count("setBusy(true)") == 2, \
+        "предупреждение включается не во всех точках запуска (их две: проверка и заливка)"
+
     # ограничение по фрагментам сказано и в панели, и в README
     assert "несколько фрагментов" in text, "в логе нет упоминания пропуска фрагментированных глав"
     assert "разбитые на сайте на несколько фрагментов" in text, \

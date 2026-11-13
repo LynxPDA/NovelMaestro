@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rulate: массовое обновление глав из .txt
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      2.9.0
+// @version      2.10.0
 // @description  Льёт перевод глав на tl.rulate.ru из .txt. Встроен в страницу книги, в тему сайта. План сопоставления с правкой строится сам. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Поиск по названию. Сверка главы (chrF). Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным. Главы, разбитые на несколько фрагментов, пропускаются.
 // @author       NovelMaestro
 // @license      MIT
@@ -25,9 +25,9 @@
 (function () {
 'use strict';
 
-/* Версия панели — из meta.js (сборщик подставляет 2.9.0): вторая
+/* Версия панели — из meta.js (сборщик подставляет 2.10.0): вторая
    копия номера в разметке разъезжается с релизом. */
-const APP_VERSION = '2.9.0';
+const APP_VERSION = '2.10.0';
 
 const CFG = {
   delayMs: 2100,
@@ -1080,7 +1080,7 @@ html.dark-theme #ru-bulk, body.dark-theme #ru-bulk {
 #ru-bulk { max-height: min(70vh, 720px); }
 
 #ru-bulk .ru-hd {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px 12px; border-bottom: 1px solid #ddd;
   background: #f5f5f5; font-weight: 600;
 }
@@ -1089,6 +1089,17 @@ html.dark-theme #ru-bulk .ru-hd, body.dark-theme #ru-bulk .ru-hd {
   border-bottom-color: var(--dark-border-primary, #404040);
 }
 #ru-bulk .ru-hd b { font-size: 13px; font-weight: 600; }
+/* Предупреждение на время запуска: обычный шрифт и обычный цвет, чтобы не
+   выглядело ошибкой; заметность даёт жёлтый треугольник, а не красный текст. */
+#ru-bulk .ru-run-warn {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-left: auto; font-weight: 400; font-size: 12.5px;
+  color: #a57300; white-space: nowrap;
+}
+#ru-bulk .ru-run-warn[hidden] { display: none; }
+#ru-bulk .ru-run-warn svg { flex: 0 0 auto; color: #e0a800; }
+html.dark-theme #ru-bulk .ru-run-warn, body.dark-theme #ru-bulk .ru-run-warn { color: #ffd166; }
+html.dark-theme #ru-bulk .ru-run-warn svg, body.dark-theme #ru-bulk .ru-run-warn svg { color: #ffc107; }
 #ru-bulk .ru-hd .ru-ver { font-weight: 400; color: #888; font-size: 11.5px; }
 html.dark-theme #ru-bulk .ru-hd .ru-ver, body.dark-theme #ru-bulk .ru-hd .ru-ver { color: var(--dark-text-muted, #888); }
 
@@ -1115,7 +1126,10 @@ html.dark-theme #ru-bulk button:hover:not(:disabled), body.dark-theme #ru-bulk b
 html.dark-theme #ru-bulk button.ru-go, body.dark-theme #ru-bulk button.ru-go { background: #2e9e5b; border-color: #27864c; color: #fff; }
 
 #ru-bulk .ru-log-box {
-  flex: 1 1 auto; min-height: 90px; overflow: auto !important;
+  /* 220px — это примерно десять строк лога: шапка запуска, список глав
+     и строка «вне диапазона» помещаются без прокрутки, а на длинном
+     прогоне лог растёт дальше вместе с панелью. */
+  flex: 1 1 auto; min-height: 220px; overflow: auto !important;
   background: #fafafa; border: 1px solid #ddd; border-radius: 4px;
   padding: 7px !important; margin: 8px 0 0 0 !important;
   font: 11.5px/1.45 ui-monospace, Menlo, Consolas, monospace !important;
@@ -1228,6 +1242,23 @@ html.dark-theme #ru-bulk .ru-pr-chrf.ru-good, body.dark-theme #ru-bulk .ru-pr-ch
    поверх страницы: человек работает с главами, и панель должна быть на том
    же месте, что и они. Нет такого блока (другая разметка, мобильная
    версия) — остаётся тело страницы, панель всё равно доступна. */
+/* Кнопка «Добавить главы» есть только у владельца книги — рядом с ней и
+   место нашей кнопки: обе про одно действие, и человек ищет их вместе.
+   Классы берём у неё же, поэтому размер шрифта и высота совпадают без
+   подгонки под тему и версию сайта. Нет такой кнопки (читатель, а не
+   автор) — остаётся блок действий над таблицей. */
+function findAddChaptersButton() {
+  for (const el of document.querySelectorAll('a, button')) {
+    const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!t.startsWith('добавить глав')) continue;
+    /* Только кнопка рядом с оглавлением, а не ссылка в меню страницы. */
+    if (el.closest('#Chapters, .for_table_container, .chapter-controls')) return el;
+    if (document.querySelector('#Chapters') && el.parentNode &&
+        !el.closest('.navbar, .nav, #header, .menu')) return el;
+  }
+  return null;
+}
+
 function findChapterAnchor() {
   const table = document.querySelector('#Chapters');
   const box = (table && table.closest('.for_table_container')) || null;
@@ -1237,10 +1268,21 @@ function findChapterAnchor() {
 
 const panel = document.createElement('div');
 panel.id = 'ru-bulk';
+/* Таблица глав лежит внутри <form action="…/subscribe">, поэтому кнопка без
+   type по умолчанию отправляет форму: страница уезжает на /subscribe, а
+   панель исчезает вместе с ней. Проставляем type всем кнопкам сразу. */
+function disableFormSubmit(root) {
+  for (const b of root.querySelectorAll('button:not([type])')) b.type = 'button';
+}
 /* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
    innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
    значения CFG здесь единственные данные, но правило одно на весь файл). */
-const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <span class="ru-ver">v${APP_VERSION}</span> </div>
+const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <span class="ru-ver">v${APP_VERSION}</span>
+  <span class="ru-run-warn" id="ru-run-warn" role="status" hidden>
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 1.5 15.2 14H.8L8 1.5Zm0 3.1L3.1 12.9h9.8L8 4.6Zm-.7 2.3h1.4v3.4H7.3V6.9Zm0 4.2h1.4v1.4H7.3v-1.4Z"/></svg>
+    <span>Идёт запись — не закрывайте окно и браузер</span>
+  </span>
+</div>
 <div class="ru-bd">
   <div class="ru-row">
     <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none">
@@ -1248,7 +1290,6 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
     <button id="ru-dry" disabled>dry-run</button>
     <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Главы, разбитые на сайте на несколько фрагментов, пропускаются: один текст файла не делится на них один-к-одному">Старт</button>
     <button id="ru-stop" disabled>Стоп</button>
-    <button id="ru-log-dl" title="Скачать лог в файл rulate-bulk-log.txt">Скачать лог</button>
   </div>
   <div class="ru-row">
     <span class="ru-muted">Глав:</span> <b id="ru-count">0</b>
@@ -1306,26 +1347,34 @@ toggleBtn.setAttribute('aria-expanded', 'false');
 toggleBtn.setAttribute('aria-controls', 'ru-bulk');
 
 {
-  const { table, box } = findChapterAnchor();
-  if (table && table.parentNode) {
-    /* Кнопка и панель — прямо перед таблицей глав, внутри того же
-       контейнера: иначе ширина панели окажется уже или шире таблицы.
-       Кнопка вставляется первой, поэтому при открытии панели она остаётся
-       на своём месте сверху, а не прыгает под неё. */
-    table.parentNode.insertBefore(toggleBtn, table);
-    table.parentNode.insertBefore(panel, table);
+  /* Кнопка сайта «Добавить главы» есть только у владельца книги: у неё
+     берём и место, и оформление — размер шрифта, отступы и высоту задаёт
+     её собственный CSS, подгонять под тему не нужно. */
+  const addBtn = findAddChaptersButton();
+  if (addBtn && addBtn.parentNode) {
+    toggleBtn.className = addBtn.className || 'btn btn-default';
+    addBtn.parentNode.insertBefore(toggleBtn, addBtn.nextSibling);
+    addBtn.parentNode.insertBefore(panel, toggleBtn.nextSibling);
   } else {
-    /* Оглавления нет — страница не книга или разметка сменилась: панель
-       остаётся сверху, чтобы до неё было чем дойти. */
-    const host = document.querySelector('.for_table_container') || document.body;
-    if (box && box.parentNode) box.parentNode.insertBefore(toggleBtn, box);
-    else host.insertBefore(toggleBtn, host.firstChild);
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'max-width:100%;margin:10px 0;';
-    wrap.appendChild(panel);
-    if (toggleBtn.parentNode) toggleBtn.parentNode.insertBefore(wrap, toggleBtn.nextSibling);
-    else document.body.insertBefore(wrap, document.body.firstChild);
+    /* Читатель или другая разметка: кнопка и панель — прямо перед таблицей
+       глав, в том же контейнере, иначе ширина панели разойдётся с шириной
+       таблицы. Кнопка вставляется первой, поэтому при открытии панели она
+       остаётся сверху, а не прыгает под неё. */
+    const { table, box } = findChapterAnchor();
+    if (table && table.parentNode) {
+      table.parentNode.insertBefore(toggleBtn, table);
+      table.parentNode.insertBefore(panel, table);
+    } else {
+      const host = (box && box.parentNode) || document.body;
+      host.insertBefore(panel, host.firstChild);
+      document.body.insertBefore(toggleBtn, panel);
+    }
   }
+  /* Кнопки внутри панели лежат в <form action="…/subscribe">, внутри
+     которого стоит таблица глав: кнопка без type отправила бы форму и
+     увела страницу. Своей кнопке-переключателю type ставится при создании;
+     чужие кнопки сайта не трогаем. */
+  disableFormSubmit(panel);
 }
 
 const $ = (id) => panel.querySelector('#' + id);
@@ -1634,9 +1683,7 @@ async function checkRows() {
   if (!targets.length) { log('Нечего проверять: спорных строк нет. Выделите строки в панели.', 'warn'); return; }
   log(`=== ПРОВЕРКА ${targets.length} строк (chrF) ===`, 'ok');
   aborted = false;
-  running = true;
-  $('ru-start').disabled = $('ru-dry').disabled = true;
-  $('ru-stop').disabled = false;
+  setBusy(true);
 
   for (let i = 0; i < targets.length; i++) {
     if (aborted) { log('Проверка остановлена.', 'warn'); break; }
@@ -1669,8 +1716,7 @@ async function checkRows() {
   }
   ui.setProgress(targets.length, targets.length);
   log('=== ПРОВЕРКА ЗАВЕРШЕНА ===', 'ok');
-  $('ru-stop').disabled = true;
-  $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;
+  setBusy(false);
   renderPlan();
 }
 
@@ -1689,6 +1735,22 @@ $('ru-plan-reset').onclick = () => {
    таблицей глав по кнопке и уходит по повторному нажатию. Пока прогон идёт,
    кнопка не закрывает панель — иначе случайное нажатие спрячет прогресс
    и остановить будет нечем (прогон при этом продолжался бы). */
+/* Одно место, где прогон начинается и заканчивается: флаг «идёт работа»
+   (по нему панель не закрывается), блокировка кнопок и предупреждение в
+   шапке включаются вместе — иначе одна из точек запуска про них забудет. */
+function setBusy(on) {
+  running = on;
+  $('ru-start').disabled = $('ru-dry').disabled = on || parsed.length === 0;
+  $('ru-stop').disabled = !on;
+  $('ru-run-warn').hidden = !on;
+  /* Предупреждение уезжает за пределы прокрутки шапки — подтягиваем к верху,
+     чтобы его было видно, даже если ленту уже прокрутили вниз. */
+  if (on) {
+    const bd = panel.querySelector('.ru-bd');
+    if (bd) bd.scrollTop = 0;
+  }
+}
+
 function panelOpen() { return panel.classList.contains('ru-open'); }
 
 function setPanelOpen(open) {
@@ -1714,12 +1776,6 @@ toggleBtn.onclick = () => {
 };
 
 $('ru-pick').onclick = () => $('ru-file').click();
-$('ru-log-dl').onclick = () => {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([logText], { type: 'text/plain;charset=utf-8' }));
-  a.download = 'rulate-bulk-log.txt';
-  a.click();
-};
 
 $('ru-file').addEventListener('change', (e) => {
   const f = e.target.files[0];
@@ -1803,9 +1859,7 @@ async function launch(dryRun) {
   const onlyFi = null;
   if (selected.size) log(`Выделено ${selected.size} строк (для «Проверить»); заливка идёт по всему плану.`, 'plain');
 
-  running = true;
-  $('ru-start').disabled = $('ru-dry').disabled = true;
-  $('ru-stop').disabled = false;
+  setBusy(true);
   log(`=== ${dryRun ? 'DRY-RUN' : 'ЗАПУСК'} ===`, 'ok');
   try {
     const res = await run(parsed, { dryRun, skipSame: CFG.skipSame, rangeStr, plan, onlyFi }, ui);
@@ -1815,9 +1869,7 @@ async function launch(dryRun) {
       renderPlan();
     }
   } finally {
-    running = false;
-    $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;
-    $('ru-stop').disabled = true;
+    setBusy(false);
   }
 }
 
