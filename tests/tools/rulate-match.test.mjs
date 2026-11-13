@@ -90,7 +90,7 @@ function boot(site) {
       + ' buildPlan, planAssign, applyOverrides, collectOverrides, writePlan, planResetSelected,'
       + ' parseChrfThreshold,'
       + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange,'
-      + ' titleCore, titleScore, rankCandidates, TITLE_SIMILAR_MIN };',
+      + ' titleScore, rankCandidates, TITLE_SIMILAR_MIN };',
   )(
     document,
     { pathname: `/book/${BOOK}`, origin: 'https://tl.rulate.ru' },
@@ -554,21 +554,16 @@ test('rulate: глава без номера не теряется без «Titl
 
 /* ── подбор кандидатов по названию (chrF) ── */
 
-test('rulate: ядро названия отбрасывает «Глава N.»', () => {
-  const { api } = boot([]);
-  assert.equal(api.titleCore('Глава 12. Битва у реки'), 'Битва у реки');
-  assert.equal(api.titleCore('Глава 1.'), '', 'только префикс — ядра нет');
-  assert.equal(api.titleCore('Том 2: Прибытие'), 'Прибытие');
-  assert.equal(api.titleCore('Chapter 5 — The End'), 'The End');
-  assert.equal(api.titleCore('Пролог. Начало'), 'Пролог. Начало', 'без префикса — целиком');
-});
-
 test('rulate: chrF названий ставит родственное название выше чужого', () => {
+  /* Сравниваем строку целиком: префикс «Глава N.» не вырезается — своего
+     формата у каждой книги хватает, и правило под одну ломает другую. */
   const { api } = boot([]);
   const near = api.titleScore('Глава 1. Битва у реки', 'Глава 1. Битва на реке');
   const far = api.titleScore('Глава 1. Битва у реки', 'Глава 1. Совет старейшин');
   assert.ok(near > far, `родственное (${near.toFixed(2)}) должно быть выше чужого (${far.toFixed(2)})`);
+  assert.ok(near > 0.7, 'правка одного слова в названии — это «та же глава»');
   assert.equal(api.titleScore('Глава 3. Имя', 'Глава 3. Имя'), 1, 'одно название — 1.0');
+  assert.equal(api.titleScore('  Глава 3. Имя ', 'глава 3. имя'), 1, 'регистр и пробелы не значат ничего');
 });
 
 test('rulate: кандидаты отсортированы по похожести, но решает человек', async () => {
@@ -598,4 +593,7 @@ test('rulate: счёт не показывается у непохожих на�
   const ranked = api.rankCandidates('Глава 9. Битва у реки', site);
   assert.ok(ranked.every((c) => !c.same), 'низкий счёт не выдаётся за похожесть');
   assert.ok(ranked.every((c) => c.score < api.TITLE_SIMILAR_MIN));
+  // порог выше общего префикса: «Глава 9.» сама по себе даёт около 0.3,
+  // и показывать её как «похожесть» значило бы врать
+  assert.ok(api.TITLE_SIMILAR_MIN >= 0.5, 'порог не должен ловить совпадение одного префикса');
 });
