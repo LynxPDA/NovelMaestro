@@ -225,7 +225,7 @@ def test_tc_main_skips_broken_regexp_rule(tmp_path, monkeypatch, capsys):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# clean_and_compile: export_titles / compile_book / chunks / нативные EPUB/FB2
+# clean_and_compile: compile_book / chunks / нативные EPUB/FB2
 # ══════════════════════════════════════════════════════════════════════
 @pytest.fixture()
 def cac_env(tmp_path, monkeypatch):
@@ -246,9 +246,8 @@ def cac_env(tmp_path, monkeypatch):
     monkeypatch.chdir(proj_dir)
     old = {k: v for k, v in vars(CAC.cfg).items()}
     CAC.cfg.base_dir = str(chapters)
-    # финальные сборки — корень проекта; рабочие файлы (titles) — tmp/
+    # финальные сборки — корень проекта
     CAC.cfg.out_dir = str(proj_dir)
-    CAC.cfg.tmp_dir = str(proj_dir / "tmp")
     CAC.cfg.start, CAC.cfg.end = 1, 2
     CAC.cfg.compile_type = "polished"
     CAC.cfg.set_order = 1
@@ -260,23 +259,30 @@ def cac_env(tmp_path, monkeypatch):
 
 
 def test_cac_titles_mode_removed(cac_env):
-    """Режим titles выпилен из CLI: выбора нет, export_titles отсутствует."""
+    """Заголовки живут только в файлах глав: режима titles нет.
+
+    Вместе с ним ушёл и файл заголовков `tmp/titles_*.txt`: сборка читала
+    его и подменяла названия глав старыми (файл оставался от прежней
+    нумерации, а записать его стало нечем), при этом в лог писала
+    «Кастомные заголовки: N» — и книга уезжала с чужими названиями.
+    """
     assert not hasattr(CAC, "export_titles")
+    assert not hasattr(CAC, "load_custom_titles")
+    assert not hasattr(CAC.cfg, "titles_file")
+    assert not hasattr(CAC.cfg, "get_actual_titles_file")
     choices = CAC.build_parser()._actions
     mode_choices = [a for a in choices if a.dest == "mode"][0].choices
     assert mode_choices is not None and "titles" not in mode_choices
+    assert not [a for a in choices if a.dest == "tmp_dir"]
 
 
 def test_cac_compile_txt(cac_env):
-    # кастомные заголовки подхватываются из titles-файла
-    Path(CAC.cfg.tmp_dir).mkdir(exist_ok=True)
-    Path(CAC.cfg.titles_file).write_text(
-        "1:::Глава 1 (правленый)\n2:::Глава 2 (правленый)\n", encoding="utf-8")
+    """Заголовок главы — из самого файла главы, других источников нет."""
     CAC.compile_book("txt")
     out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_rulate.txt"
     assert out.is_file()
     content = out.read_text(encoding="utf-8")
-    assert "[Глава 1 (правленый) :|: 1]" in content
+    assert "[Глава 1 :|: 1]" in content
     assert "【Квадратные】" in content      # 【】 НЕ заменяются (косметика убрана)
     assert "* * *" in content              # «. . .» → сепаратор
     log = Path("logs") / "build_log_txt.txt"
@@ -429,7 +435,7 @@ def test_cac_epub_wiki_chapter_title(cac_env):
         "Wiki Новеллы\n\n### Линь Шуй\n\n#### Описание\n\nТекст статьи.\n",
         encoding="utf-8")
     CAC.cfg.start, CAC.cfg.end = 1, 3
-    CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "nonexistent.jpg")
+    CAC.cfg.epub_cover = str(Path(CAC.cfg.out_dir) / "nonexistent.jpg")
     CAC.compile_book("epub")
     epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_3.epub"
     assert epub.is_file()
@@ -455,8 +461,7 @@ def test_cac_compile_txt_no_titles_fallback(cac_env):
 def test_cac_compile_epub_native(cac_env):
     """Нативная генерация EPUB: ZIP-структура, обложка, главы."""
     import zipfile
-    Path(CAC.cfg.tmp_dir).mkdir(exist_ok=True)
-    cover = Path(CAC.cfg.tmp_dir) / "cover.jpg"
+    cover = Path(CAC.cfg.out_dir) / "cover.jpg"
     cover.write_bytes(b"fake")
     CAC.cfg.epub_cover = str(cover)
     CAC.compile_book("epub")
@@ -482,7 +487,7 @@ def test_cac_compile_epub_native(cac_env):
 def test_cac_compile_epub_no_cover(cac_env):
     """EPUB без обложки — не падает, обложка отсутствует в ZIP."""
     import zipfile
-    CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "nonexistent.jpg")
+    CAC.cfg.epub_cover = str(Path(CAC.cfg.out_dir) / "nonexistent.jpg")
     CAC.compile_book("epub")
     epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.epub"
     assert epub.is_file()
@@ -494,8 +499,7 @@ def test_cac_compile_epub_no_cover(cac_env):
 
 def test_cac_compile_fb2_native(cac_env):
     """Нативная генерация FB2: XML-структура, обложка, donate-страница."""
-    Path(CAC.cfg.tmp_dir).mkdir(exist_ok=True)
-    cover = Path(CAC.cfg.tmp_dir) / "cover.jpg"
+    cover = Path(CAC.cfg.out_dir) / "cover.jpg"
     cover.write_bytes(b"fake")
     CAC.cfg.fb2_cover = str(cover)
     # Создаём donate-файл для теста (ищется в ./source от cwd — папка проекта)
@@ -569,7 +573,7 @@ def test_cac_separators_rendered_in_books(cac_env):
     и подавно)."""
     import zipfile
     CAC.cfg.add_donate_page = 0
-    CAC.cfg.epub_cover = str(Path(CAC.cfg.tmp_dir) / "нет.jpg")
+    CAC.cfg.epub_cover = str(Path(CAC.cfg.out_dir) / "нет.jpg")
     CAC.cfg.fb2_inject_cover = 0
     CAC.compile_book("epub")
     epub = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2.epub"
@@ -689,7 +693,7 @@ def test_cac_main_exits_nonzero_on_missing_type(cac_env, monkeypatch):
     monkeypatch.setattr(sys, "argv", [
         "clean_and_compile.py", "--mode", "txt",
         "--source-type", "redacted",   # файлов этого типа нет вовсе
-        "--chapters-dir", CAC.cfg.base_dir, "--tmp-dir", str(cac_env)])
+        "--chapters-dir", CAC.cfg.base_dir])
     with pytest.raises(SystemExit) as exc:
         CAC.main()
     assert exc.value.code == 1
@@ -698,7 +702,7 @@ def test_cac_main_exits_nonzero_on_missing_type(cac_env, monkeypatch):
 def test_cac_main_argparse(cac_env, monkeypatch):
     monkeypatch.setattr(sys, "argv", [
         "clean_and_compile.py", "--mode", "txt",
-        "--chapters-dir", CAC.cfg.base_dir, "--tmp-dir", str(cac_env)])
+        "--chapters-dir", CAC.cfg.base_dir])
     CAC.main()
     # финальная сборка — в корень проекта (дефолт --out-dir = cwd)
     assert (cac_env / "Тестовая_Книга" / "Тестовая_Книга_1_2_rulate.txt").is_file()
@@ -717,7 +721,7 @@ def test_cac_chunk_size_splits_any_mode(cac_env, monkeypatch):
     названием проекта; финальные файлы — корень проекта."""
     monkeypatch.setattr(sys, "argv", [
         "clean_and_compile.py", "--mode", "txt",
-        "--chapters-dir", CAC.cfg.base_dir, "--tmp-dir", "tmp",
+        "--chapters-dir", CAC.cfg.base_dir,
         "--chunk-size", "1"])
     CAC.main()
     # cwd теста = папка проекта Тестовая_Книга → файлы в её корне
@@ -730,7 +734,7 @@ def test_cac_chunk_size_zero_single(cac_env, monkeypatch):
     """chunk-size 0/пусто — одна сборка без разбивки (файл в корне)."""
     monkeypatch.setattr(sys, "argv", [
         "clean_and_compile.py", "--mode", "txt",
-        "--chapters-dir", CAC.cfg.base_dir, "--tmp-dir", "tmp"])
+        "--chapters-dir", CAC.cfg.base_dir])
     CAC.main()
     assert (cac_env / "Тестовая_Книга"
             / "Тестовая_Книга_1_2_rulate.txt").is_file()

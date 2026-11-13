@@ -4,7 +4,11 @@
 clean_and_compile.py — компиляция глав в TXT/EPUB/FB2 (чистый CLI).
 
 Без интерактивного меню: все параметры через argparse.
-Интерактивный режим — в лаунчере tools/run_clean_and_compile.py.
+
+Название главы — только из её файла (первое «Глава N», иначе первая
+непустая строка): правится оно вкладкой «Главы» в самих файлах, а
+отдельного файла заголовков нет — он оставался от прежней нумерации и
+подменял названия собранной книги.
 
 Режимы (--mode):
   txt          сборка единого TXT (Rulate): заголовки «# [Название :|: N]»,
@@ -22,7 +26,6 @@ clean_and_compile.py — компиляция глав в TXT/EPUB/FB2 (чист
 import argparse
 import os
 import re
-import glob
 import base64
 import zipfile
 from datetime import datetime
@@ -75,7 +78,6 @@ class Config:
         self.paywall = ""
         self.volume = ""
         self.base_dir = "./chapters"
-        self.tmp_dir = "."
         self.out_dir = "."           # финальные сборки — корень проекта
         self.epub_cover = "./source/cover.jpg"
         self.epub_meta = "./source/metadata.yaml"
@@ -88,28 +90,6 @@ class Config:
         self.donate_file = ""             # внешний файл страницы поддержки
         self.compile_type = "polished"   # polished|redacted|translated|chapter
 
-
-    @property
-    def titles_file(self):
-        # файл заголовков — тоже рабочий файл: в tmp/ проекта
-        return os.path.join(self.tmp_dir, f"titles_{self.start}_{self.end}.txt")
-
-    def get_actual_titles_file(self):
-        exact_file = self.titles_file
-        if os.path.isfile(exact_file):
-            return exact_file
-        for f in glob.glob(os.path.join(self.tmp_dir, "titles_*_*.txt")):
-            name = os.path.basename(f)
-            match = re.match(r"titles_(\d+)_(\d+)\.txt", name)
-            if match:
-                try:
-                    f_start = int(match.group(1))
-                    f_end = int(match.group(2))
-                except ValueError:
-                    continue
-                if f_start <= self.start and f_end >= self.end:
-                    return f
-        return exact_file
 
 cfg = Config()
 
@@ -165,14 +145,6 @@ def safe_read(file_path):
     except UnicodeDecodeError:
         with open(file_path, "r", encoding="cp1251") as f:
             return f.read()
-
-def safe_read_lines(file_path):
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.readlines()
-    except UnicodeDecodeError:
-        with open(file_path, "r", encoding="cp1251") as f:
-            return f.readlines()
 
 def get_content_type(image_path):
     ext = os.path.splitext(image_path)[1].lower()
@@ -644,26 +616,6 @@ def build_fb2_native(chapters_data, meta, cover_path, output_path):
         return False
 
 
-# ==========================================
-# ЗАГРУЗКА КАСТОМНЫХ ЗАГОЛОВКОВ
-# ==========================================
-def load_custom_titles():
-    custom_titles = {}
-    target_file = cfg.get_actual_titles_file()
-    if os.path.isfile(target_file):
-        lines = safe_read_lines(target_file)
-        for line in lines:
-            if ":::" in line:
-                parts = line.strip().split(":::", 1)
-                if len(parts) == 2 and parts[0].isdigit():
-                    try:
-                        chapter_num = int(parts[0])
-                    except ValueError:
-                        continue
-                    if cfg.start <= chapter_num <= cfg.end:
-                        custom_titles[chapter_num] = parts[1]
-    return custom_titles
-
 def _book_label() -> str:
     """Метка имени файла: NFC + санитизация basename cwd.
 
@@ -708,7 +660,6 @@ def compile_book(mode):
         print(f"Ошибка: не удалось создать logs/: {exc}")
         return 1
     log_file_path = os.path.join("logs", f"build_log_{mode}.txt")
-    custom_titles = load_custom_titles()
     missing_chapters = []
     chapter_map = build_chapter_map(cfg.base_dir)
     chapters_data = []
@@ -726,7 +677,6 @@ def compile_book(mode):
     try:
         log("==========================================", out_log)
         log(f"Начало сборки ({mode}): {output_file}", out_log)
-        log(f"Кастомные заголовки: {len(custom_titles)}", out_log)
         log(f"Время старта: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", out_log)
         log("==========================================", out_log)
         for i in range(cfg.start, cfg.end + 1):
@@ -771,9 +721,7 @@ def compile_book(mode):
                     "")
                 orig_header = _first.lstrip("#").strip() or f"Глава {i}"
 
-            final_title = custom_titles.get(i, "")
-            if not final_title:
-                final_title = orig_header
+            final_title = orig_header
 
             if mode in ("epub", "fb2"):
                 # epub/fb2 — заголовок отдельно (title); сепаратор —
@@ -936,8 +884,6 @@ def build_parser():
                    help="Глав в одной части: указано (>0) — диапазон "
                         "разбивается на части для ЛЮБОГО режима; пусто/0 "
                         "= одна сборка без разбивки. Единица — ГЛАВЫ.")
-    p.add_argument("--tmp-dir", default="tmp",
-                   help="Каталог рабочих файлов сборки (по умолчанию: tmp)")
     p.add_argument("--out-dir", default=".",
                    help="Каталог финальных сборок TXT/EPUB/FB2 "
                         "(по умолчанию: корень проекта)")
@@ -968,7 +914,6 @@ def main():
     print(f"Запуск: {_shlex.join(_sys.argv)}")
 
     cfg.base_dir = args.chapters_dir
-    cfg.tmp_dir = args.tmp_dir
     cfg.out_dir = args.out_dir
     cfg.compile_type = args.source_type
     cfg.epub_cover = "" if args.no_cover else resolve_cover_path(args.epub_cover)
@@ -977,11 +922,6 @@ def main():
     cfg.fb2_inject_cover = 0 if (args.no_fb2_cover or args.no_cover) else 1
     cfg.add_donate_page = 0 if args.no_donate else 1
     cfg.donate_file = args.donate_file
-    try:
-        os.makedirs(cfg.tmp_dir, exist_ok=True)
-    except OSError as exc:
-        print(f"Ошибка: не удалось создать {cfg.tmp_dir}: {exc}")
-        return 1
     try:
         os.makedirs(cfg.out_dir, exist_ok=True)
     except OSError as exc:

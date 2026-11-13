@@ -730,23 +730,6 @@ def test_e2c_rename_chapters(tmp_path):
 # ══════════════════════════════════════════════════════════════════════
 # cli/clean_and_compile.py
 # ══════════════════════════════════════════════════════════════════════
-def test_cac_config_titles_file(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    CAC.cfg.start, CAC.cfg.end = 5, 10
-    CAC.cfg.tmp_dir = "."
-    assert CAC.cfg.titles_file == os.path.join(".", "titles_5_10.txt")
-    # точный файл
-    Path("titles_5_10.txt").write_text("5:::Глава 5", encoding="utf-8")
-    assert CAC.cfg.get_actual_titles_file() == os.path.join(".", "titles_5_10.txt")
-    # покрывающий файл
-    (tmp_path / "titles_5_10.txt").unlink()
-    Path("titles_1_100.txt").write_text("5:::Глава 5", encoding="utf-8")
-    assert CAC.cfg.get_actual_titles_file() == os.path.join(".", "titles_1_100.txt")
-    # ничего нет → точное имя (для выгрузки)
-    Path("titles_1_100.txt").unlink()
-    assert CAC.cfg.get_actual_titles_file() == os.path.join(".", "titles_5_10.txt")
-
-
 def test_cac_detect_range():
     assert CAC.detect_range({3: "a", 7: "b"}) == (3, 7)
     assert CAC.detect_range({}) is None

@@ -210,7 +210,6 @@ def build_clean_and_compile(form: dict, ctx: dict) -> list[str]:
     # пусто/0 — одна сборка без разбивки
     if form.get("chunk_size") not in (None, "", 0):
         argv += ["--chunk-size", str(form["chunk_size"])]
-    # --tmp-dir не передаётся: рабочие файлы — tmp/ проекта (дефолт CLI)
     # обложка/метаданные/донат относятся только к книжным форматам
     # (в txt-режимах форма их прячет — и в argv они не попадают)
     book = mode in ("epub", "fb2")
