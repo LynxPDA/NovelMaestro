@@ -200,10 +200,14 @@ def test_rulate_panel_invariants():
         "кнопка не в стиле сайта (btn btn-default, как «Выбрать диапазон» рядом)"
     assert "table.parentNode.insertBefore(panel, table)" in text, \
         "панель не вставлена перед таблицей глав: её ширина разойдётся с таблицей"
+    assert "tocHeading.parentNode.insertBefore(btnRow, tocHeading.nextSibling)" in text, \
+        "кнопка не встала своей строкой под заголовком «Оглавление:»"
+    assert "function findTocHeading(table)" in text, \
+        "заголовок «Оглавление:» не ищется: кнопка уедет в ряд кнопок сайта"
     assert "siteBtn.parentNode.insertBefore(toggleBtn, siteBtn.nextSibling)" in text, \
-        "кнопка не встала сразу за кнопкой сайта («Связанные переводы»)"
-    assert "panel.parentNode.insertBefore(toggleBtn, panel)" in text, \
-        "без кнопки-образца наша кнопка не встала над панелью"
+        "нет запасного места, когда заголовка оглавления не нашлось"
+    assert "row.appendChild(toggleBtn)" in text, \
+        "без заголовка и кнопки сайта наша кнопка остаётся без своей строки"
     assert "#ru-bulk.ru-open { display: flex" in text, \
         "нет состояния «показана»: кнопка не сможет открыть панель"
     assert "function setPanelOpen(open)" in text, "нет переключателя панели"
@@ -280,10 +284,15 @@ def test_rulate_panel_invariants():
 
     # ── кнопка стоит после «Добавить главы» и в её оформлении ──
     assert "function findSiteButton(patterns)" in text, "нет поиска кнопки-образца сайта"
-    assert "/^связанные переводы/" in text, "кнопка не привязана к «Связанные переводы»"
+    assert "/^связанные переводы/" in text, "нет ориентира «Связанные переводы»"
     assert "/^добавить глав/" in text, "нет запасного ориентира «Добавить главы»"
-    assert "toggleBtn.className = siteBtn.className || 'btn btn-default'" in text, \
+    assert "toggleBtn.className = (siteBtn && siteBtn.className) || 'btn btn-default'" in text, \
         "оформление не взято у кнопки сайта: размер шрифта разойдётся"
+
+    # ── иконка у кнопки — спрайт сайта, как у остальных кнопок Bootstrap 2 ──
+    assert "className: 'icon-refresh'" in text, "у кнопки нет иконки-спрайта сайта"
+    assert '#ru-toggle i[class^="icon-"] { margin: 1px 4px 0 0;' in text, \
+        "иконка не выровнена как у кнопок сайта: отступ и вертикаль разойдутся"
 
     # ── таблица глав лежит внутри <form …/subscribe>: кнопки не должны её слать ──
     assert "function disableFormSubmit(root)" in text, \
@@ -303,8 +312,13 @@ def test_rulate_panel_invariants():
     assert re.search(r"#ru-bulk \.ru-log-box \{[^}]*overflow: auto", text), \
         "лог не прокручивается: строки уйдут под нижний край"
 
-    # ── «Скачать лог» снята ──
+    # ── снятые кнопки не вернулись ──
     assert 'id="ru-log-dl"' not in text, "вернулась кнопка «Скачать лог»"
+    assert 'id="ru-dry"' not in text, "вернулась кнопка dry-run"
+    assert "async function launch(dryRun)" not in text, \
+        "запуск снова принимает режим dry-run: у панели его больше нет"
+    assert "async function launch()" in text, "запуск потерял единую точку входа"
+    assert "dryRun: false" in text, "прогон не зафиксирован как настоящий"
 
     # ── предупреждение о запуске в шапке ──
     assert 'id="ru-run-warn"' in text, "в шапке нет предупреждения о запуске"

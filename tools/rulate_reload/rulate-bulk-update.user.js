@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Rulate: массовое обновление глав из .txt
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      2.11.0
-// @description  Льёт перевод глав на tl.rulate.ru из .txt. Встроен в страницу книги, в тему сайта. План сопоставления с правкой строится сам. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Поиск по названию. Сверка главы (chrF). Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным. Главы, разбитые на несколько фрагментов, пропускаются.
+// @version      2.12.0
+// @description  Льёт перевод глав на tl.rulate.ru из .txt. Кнопка под «Оглавление:», панель в тему сайта. План сопоставления с правкой строится сам. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Поиск по названию. Сверка главы (chrF). Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным. Главы, разбитые на несколько фрагментов, пропускаются.
 // @author       NovelMaestro
 // @license      MIT
 // @homepageURL  https://github.com/LynxPDA/NovelMaestro
@@ -25,9 +25,9 @@
 (function () {
 'use strict';
 
-/* Версия панели — из meta.js (сборщик подставляет 2.11.0): вторая
+/* Версия панели — из meta.js (сборщик подставляет 2.12.0): вторая
    копия номера в разметке разъезжается с релизом. */
-const APP_VERSION = '2.11.0';
+const APP_VERSION = '2.12.0';
 
 const CFG = {
   delayMs: 2100,
@@ -1089,6 +1089,15 @@ html.dark-theme #ru-bulk .ru-hd, body.dark-theme #ru-bulk .ru-hd {
   background: var(--dark-bg-secondary, #2d2d2d);
   border-bottom-color: var(--dark-border-primary, #404040);
 }
+/* Своя строка кнопки: кнопка стоит выше ряда actions сайта, поэтому её
+   отступ снизу отделяет её от чужих кнопок. */
+#ru-bulk, .ru-btn-row { box-sizing: border-box; }
+.ru-btn-row { margin: 6px 0 10px; }
+.ru-btn-row > button { cursor: pointer; }
+/* Иконка — спрайт сайта (Bootstrap 2): те же 14x14 и отступ справа, что у
+   «Добавить главы», иначе кнопка выбивается из ряда. */
+#ru-toggle i[class^="icon-"] { margin: 1px 4px 0 0; vertical-align: text-top; }
+#ru-toggle > span { vertical-align: middle; }
 #ru-bulk .ru-hd b { font-size: 13px; font-weight: 600; }
 /* Предупреждение на время запуска: обычный шрифт и обычный цвет, чтобы не
    выглядело ошибкой; заметность даёт жёлтый треугольник, а не красный текст. */
@@ -1271,6 +1280,24 @@ function findChapterAnchor() {
   return { table, box };
 }
 
+/* Заголовок «Оглавление:» — h2 над списком глав. Ищем его по документу, а
+   не по соседям таблицы: между ними стоят переключатель страниц, ряд
+   кнопок и форма подписки, и спускаться по ним поштучно значит зависеть от
+   их порядка. Берём ближайший сверху — он и есть заголовок оглавления. */
+function findTocHeading(table) {
+  if (!table || !document.body.contains(table)) return null;
+  let best = null, bestDist = Infinity;
+  for (const h of document.querySelectorAll('h1, h2, h3')) {
+    if (!/оглавлен/i.test(h.textContent || '')) continue;
+    if (h.contains(table) || table.contains(h)) continue;
+    if (!(h.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+    const r1 = h.getBoundingClientRect(), r2 = table.getBoundingClientRect();
+    const dist = Math.abs(r2.top - r1.bottom);
+    if (dist < bestDist) { bestDist = dist; best = h; }
+  }
+  return best;
+}
+
 const panel = document.createElement('div');
 panel.id = 'ru-bulk';
 /* Таблица глав лежит внутри <form action="…/subscribe">, поэтому кнопка без
@@ -1292,7 +1319,6 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
   <div class="ru-row">
     <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none">
     <button id="ru-pick">Выбрать .txt</button>
-    <button id="ru-dry" disabled>dry-run</button>
     <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Главы, разбитые на сайте на несколько фрагментов, пропускаются: один текст файла не делится на них один-к-одному">Старт</button>
     <button id="ru-stop" disabled>Стоп</button>
   </div>
@@ -1347,25 +1373,40 @@ const toggleBtn = document.createElement('button');
 toggleBtn.type = 'button';
 toggleBtn.id = 'ru-toggle';
 toggleBtn.className = 'btn btn-default';
-toggleBtn.textContent = 'Обновление глав';
+/* Иконка — спрайт сайта (Bootstrap 2, `icon-*`): те же 14x14, что у
+   «Добавить главы» и прочих кнопок, поэтому кнопка читается как своя.
+   Текст — в отдельном span: на узком экране он может переноситься, а
+   иконка остаётся на месте. */
+toggleBtn.append(
+  Object.assign(document.createElement('i'), { className: 'icon-refresh' }),
+  Object.assign(document.createElement('span'), { textContent: 'Обновление глав' }),
+);
 toggleBtn.setAttribute('aria-expanded', 'false');
 toggleBtn.setAttribute('aria-controls', 'ru-bulk');
 
 {
-  /* Кнопка сайта — образец оформления и место для нашей кнопки: её просят
-     сразу после «Связанные переводы». Панель же ставится отдельным блоком
-     во всю ширину, иначе она получила бы ширину контейнера кнопок и таблица
-     глав рядом с ней показалась бы уже. */
+  /* Кнопка сайта — образец оформления: у неё берутся классы, поэтому шрифт,
+     отступы и высота совпадают без подгонки. Место своё — своя строка под
+     заголовком «Оглавление:», выше ряда действий сайта: иначе кнопка встала
+     бы последней в чужом ряду. */
   const siteBtn = findAddChaptersButton();
-  if (siteBtn && siteBtn.parentNode) {
-    toggleBtn.className = siteBtn.className || 'btn btn-default';
+  toggleBtn.className = (siteBtn && siteBtn.className) || 'btn btn-default';
+
+  const { table, box } = findChapterAnchor();
+  const tocHeading = findTocHeading(table);
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'ru-btn-row';
+  btnRow.appendChild(toggleBtn);
+  if (tocHeading && tocHeading.parentNode) {
+    tocHeading.parentNode.insertBefore(btnRow, tocHeading.nextSibling);
+  } else if (siteBtn && siteBtn.parentNode) {
     siteBtn.parentNode.insertBefore(toggleBtn, siteBtn.nextSibling);
   }
 
-  const { table, box } = findChapterAnchor();
   if (table && table.parentNode) {
     /* Панель — прямо перед таблицей глав, в том же контейнере: ширина
-       совпадает с таблицей. */
+       совпадает с шириной таблицы, а не ряда кнопок. */
     table.parentNode.insertBefore(panel, table);
   } else {
     const host = (box && box.parentNode) || document.body;
@@ -1373,8 +1414,10 @@ toggleBtn.setAttribute('aria-controls', 'ru-bulk');
   }
 
   if (!toggleBtn.parentNode) {
-    /* Образца нет (читатель): кнопка — над панелью, в том же контейнере. */
-    panel.parentNode.insertBefore(toggleBtn, panel);
+    /* Ни заголовка, ни кнопки сайта (другая разметка): кнопка над панелью. */
+    const row = panel.parentNode.insertBefore(document.createElement('div'), panel);
+    row.className = 'ru-btn-row';
+    row.appendChild(toggleBtn);
   }
 
   /* Кнопки внутри панели лежат в <form action="…/subscribe">, внутри
@@ -1638,7 +1681,7 @@ function renderPlan() {
   foot.id = 'ru-plan-foot';
   list.appendChild(foot);
   updateFoot(rows.length);
-  $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;
+  $('ru-start').disabled = parsed.length === 0;
 }
 
 /* Прокрутка до низа списка дорисовывает следующую порцию: страница
@@ -1762,7 +1805,7 @@ $('ru-plan-reset').onclick = () => {
    шапке включаются вместе — иначе одна из точек запуска про них забудет. */
 function setBusy(on) {
   running = on;
-  $('ru-start').disabled = $('ru-dry').disabled = on || parsed.length === 0;
+  $('ru-start').disabled = on || parsed.length === 0;
   $('ru-stop').disabled = !on;
   $('ru-run-warn').hidden = !on;
   /* Предупреждение уезжает за пределы прокрутки шапки — подтягиваем к верху,
@@ -1826,7 +1869,7 @@ $('ru-file').addEventListener('change', (e) => {
     const problems = parsed.filter(c => c.problem);
     const valid = parsed.filter(c => !c.problem);
     $('ru-count').textContent = valid.length;
-    $('ru-start').disabled = $('ru-dry').disabled = valid.length === 0;
+    $('ru-start').disabled = valid.length === 0;
     plan = null;
     site = null;
     selected = new Set();
@@ -1865,7 +1908,7 @@ $('ru-range').addEventListener('input', () => {
   renderPlan();
 });
 
-async function launch(dryRun) {
+async function launch() {
   aborted = false;
   CFG.verify = $('ru-verify').checked;
   CFG.skipSame = $('ru-skip-same').checked;
@@ -1882,9 +1925,9 @@ async function launch(dryRun) {
   if (selected.size) log(`Выделено ${selected.size} строк (для «Проверить»); заливка идёт по всему плану.`, 'plain');
 
   setBusy(true);
-  log(`=== ${dryRun ? 'DRY-RUN' : 'ЗАПУСК'} ===`, 'ok');
+  log('=== ЗАПУСК ===', 'ok');
   try {
-    const res = await run(parsed, { dryRun, skipSame: CFG.skipSame, rangeStr, plan, onlyFi }, ui);
+    const res = await run(parsed, { dryRun: false, skipSame: CFG.skipSame, rangeStr, plan, onlyFi }, ui);
     if (res && res.reports) {
       reports = new Map(res.reports.map(r => [r.fi, r]));
       plan = res.plan || plan;
@@ -1895,8 +1938,7 @@ async function launch(dryRun) {
   }
 }
 
-$('ru-dry').onclick = () => launch(true);
-$('ru-start').onclick = () => launch(false);
+$('ru-start').onclick = () => launch();
 
 log('Готово. Выберите .txt — план построится сам.', 'ok');
 })();
