@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rulate: массовое обновление глав из .txt
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      2.13.0
+// @version      2.14.0
 // @description  Льёт перевод глав на tl.rulate.ru из .txt. Кнопка под «Оглавление:», панель в тему сайта. План сопоставления с правкой строится сам. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Поиск по названию. Сверка главы (chrF). Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным. Главы, разбитые на несколько фрагментов, пропускаются.
 // @author       NovelMaestro
 // @license      MIT
@@ -25,9 +25,9 @@
 (function () {
 'use strict';
 
-/* Версия панели — из meta.js (сборщик подставляет 2.13.0): вторая
+/* Версия панели — из meta.js (сборщик подставляет 2.14.0): вторая
    копия номера в разметке разъезжается с релизом. */
-const APP_VERSION = '2.13.0';
+const APP_VERSION = '2.14.0';
 
 const CFG = {
   delayMs: 2100,
@@ -1179,7 +1179,7 @@ html.dark-theme #ru-bulk .ru-sep, body.dark-theme #ru-bulk .ru-sep { border-top-
 #ru-bulk .ru-plan-box { margin: 0 !important; }
 #ru-bulk .ru-plan-title { margin: 0 !important; }
 #ru-bulk .ru-plan-title b { font-weight: 600; }
-#ru-bulk .ru-plan-hd { gap: 8px; }
+#ru-bulk .ru-plan-hd { gap: 8px; margin-bottom: 10px !important; }
 #ru-bulk .ru-plan-list {
   /* Прокрутка своя и невысокая: план — это список на сотни строк, и тянуть
      его на всю страницу незачем, когда рядом таблица глав сайта. */
@@ -1211,18 +1211,28 @@ html.dark-theme #ru-bulk .ru-plan-row.ru-pr-manual, body.dark-theme #ru-bulk .ru
 html.dark-theme #ru-bulk .ru-plan-head, body.dark-theme #ru-bulk .ru-plan-head {
   background: var(--dark-bg-secondary, #2d2d2d); color: var(--dark-text-secondary, #b0b0b0);
 }
+/* Подписи колонок стоят по центру своей колонки: шапка повторяет сетку
+   строки (номер, название, стрелка, колонка сайта), поэтому «В файле» и
+   «На сайте» встают ровно над тем, что подписывают. */
+#ru-bulk .ru-plan-head .ru-pr-title, #ru-bulk .ru-plan-head .ru-pr-tgt { text-align: center; }
 #ru-bulk .ru-plan-head .ru-pr-tgt { display: block; }
 #ru-bulk .ru-pr-num { flex: 0 0 42px; color: #777; text-align: right; }
 #ru-bulk .ru-pr-title { flex: 1 1 44%; min-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #999; }
 #ru-bulk .ru-pr-tgt { flex: 1 1 38%; min-width: 130px; max-width: 100%; display: flex; flex-direction: column; gap: 2px; }
-#ru-bulk .ru-pr-tgt select { width: 100%; }
-#ru-bulk .ru-pr-chrf { flex: 0 0 46px; text-align: right; color: #777; }
-#ru-bulk .ru-pr-chrf.ru-bad { color: #c0392b; }
-#ru-bulk .ru-pr-chrf.ru-good { color: #1e7e45; }
-html.dark-theme #ru-bulk .ru-pr-chrf.ru-bad, body.dark-theme #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; }
-html.dark-theme #ru-bulk .ru-pr-chrf.ru-good, body.dark-theme #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; }
-#ru-bulk .ru-pr-status { flex: 0 0 auto; color: #888; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Список глав и весы — одна строка: сверка стоит справа от того, что сверяет,
+   а не отдельной колонкой у края. */
+#ru-bulk .ru-pr-pick { display: flex; align-items: center; gap: 5px; }
+#ru-bulk .ru-pr-pick select { flex: 1 1 auto; min-width: 0; }
+/* Подпись под списком: итог сверки и решение строки в одну строку, чтобы
+   высота строки не гуляла от того, сверена глава или ещё нет. */
+#ru-bulk .ru-pr-meta { display: flex; flex-wrap: wrap; gap: 0 6px; align-items: baseline; min-height: 14px; }
+#ru-bulk .ru-pr-status { color: #888; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ru-bulk .ru-pr-score { font-size: 10.5px; color: #888; white-space: nowrap; }
+#ru-bulk .ru-pr-score.ru-bad { color: #c0392b; }
+#ru-bulk .ru-pr-score.ru-good { color: #1e7e45; }
+html.dark-theme #ru-bulk .ru-pr-score.ru-bad, body.dark-theme #ru-bulk .ru-pr-score.ru-bad { color: #ff8585; }
+html.dark-theme #ru-bulk .ru-pr-score.ru-good, body.dark-theme #ru-bulk .ru-pr-score.ru-good { color: #7fe39a; }
 /* Кнопка сверки на строке: только иконка, поэтому квадратная и без рамки. */
 #ru-bulk .ru-pr-probe {
   flex: 0 0 auto; padding: 3px 5px !important; line-height: 1 !important;
@@ -1243,15 +1253,12 @@ html.dark-theme #ru-bulk .ru-pr-probe:hover:not(:disabled), body.dark-theme #ru-
   #ru-bulk .ru-bd { padding: 10px; }
   #ru-bulk .ru-plan-list { max-height: 50vh; }
   #ru-bulk .ru-plan-row { gap: 4px; }
-  /* Название и номер в одну строку, список глав под ними, кнопка сверки —
-     справа от названия. */
+  /* Название и номер в одну строку, список глав с весами под ними. */
   #ru-bulk .ru-pr-title { flex: 1 1 auto; order: 1; }
   #ru-bulk .ru-pr-num { order: 2; flex: 0 0 auto; }
-  #ru-bulk .ru-pr-probe { order: 3; }
   #ru-bulk .ru-plan-head .ru-pr-tgt { display: none; }
   #ru-bulk .ru-pr-arrow { display: none; }
   #ru-bulk .ru-pr-tgt { order: 3; flex: 1 1 100%; }
-  #ru-bulk .ru-pr-chrf { order: 4; flex: 0 0 auto; }
   #ru-bulk .ru-row > input[type=text], #ru-bulk .ru-row > input[type=number] { width: 84px; }
   #ru-bulk .ru-row > select { flex: 1 1 100%; }
   #ru-bulk button { padding: 8px 12px; }
@@ -1357,10 +1364,10 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
     <!-- Шапка таблицы: две колонки названий подписаны, иначе непонятно,
          какое из двух названий чьё. -->
     <div class="ru-plan-row ru-plan-head" aria-hidden="true">
+      <span class="ru-pr-num"></span>
       <span class="ru-pr-title">В файле</span>
       <span class="ru-pr-arrow"></span>
       <span class="ru-pr-tgt">На сайте</span>
-      <span class="ru-pr-chrf"></span>
     </div>
     <div class="ru-plan-list" id="ru-plan-list"></div>
   </div>
@@ -1543,25 +1550,32 @@ const planState = { limit: 60, PAGE: 60, open: false };
 
 /* Покраска одной строки: статус, chrF и цвет. Отдельно от построения DOM,
    потому что после ручного выбора меняется ровно эта строка. */
-function paintRow(row, tr, chrfEl, statusEl, rangeSet) {
+function paintRow(row, tr, scoreEl, statusEl, rangeSet) {
   const rep = reports.get(row.fi);
   const verdict = rep && rep.chrf != null ? chrfVerdict(rep.chrf) : 'off';
-  chrfEl.textContent = rep && rep.chrf != null ? rep.chrf.toFixed(2) : '';
-  chrfEl.className = 'ru-pr-chrf' + (verdict === 'good' ? ' ru-good' : verdict === 'bad' ? ' ru-bad' : '');
+  /* Похожа ли глава и насколько — одной подписью: «Похожа · 1.00». Число без
+     слова и слово без числа порознь заставляли сопоставлять две графы. */
+  const score = rep && rep.chrf != null ? ' · ' + rep.chrf.toFixed(2) : '';
+  /* Оценка с заглавной: она начинает подпись. Кириллица — потому что латинское
+     «chrF (без порога)» остаётся как есть. */
+  const label = rep ? rep.status.replace(/^([а-яё])/, (c) => c.toUpperCase()) : '';
+  scoreEl.textContent = label + score;
+  scoreEl.className = 'ru-pr-score' + (verdict === 'good' ? ' ru-good' : verdict === 'bad' ? ' ru-bad' : '');
+  scoreEl.hidden = !rep;
   const rangeOut = planRowRange(row, rangeSet);
   let hint = '';
   if (!row.site && row.cands.length) {
     const best = rankCandidates(row.title, row.cands)[0];
     if (best && best.score >= TITLE_SIMILAR_MIN) hint = ` · ближе «${best.siteTitle || best.title}»`;
   }
-  statusEl.textContent = (rep ? rep.status : row.how) + hint + (rangeOut ? ' · ' + rangeOut : '');
+  statusEl.textContent = (row.how || '') + hint + (rangeOut ? ' · ' + rangeOut : '');
   statusEl.title = statusEl.textContent;
   tr.className = 'ru-plan-row ' + planRowClass(row, rangeOut !== '');
 }
 
 function refreshRow(row, tr, select) {
   if (!tr) return;
-  paintRow(row, tr, tr.querySelector('.ru-pr-chrf'), tr.querySelector('.ru-pr-status'), plan.rangeSet || null);
+  paintRow(row, tr, tr.querySelector('.ru-pr-score'), tr.querySelector('.ru-pr-status'), plan.rangeSet || null);
   if (select) select.title = row.site ? 'Глава на сайте: id=' + row.site.chapterId : 'Глава на сайте не определена — выберите';
 }
 
@@ -1643,6 +1657,10 @@ function renderPlan() {
 
     const cell = document.createElement('div');
     cell.className = 'ru-pr-tgt';
+    /* Список и весы — одна полоса: сверка стоит справа от списка, а не
+       отдельной колонкой у края строки. */
+    const pick = document.createElement('div');
+    pick.className = 'ru-pr-pick';
     const select = document.createElement('select');
     select.title = row.site ? 'Глава на сайте: id=' + row.site.chapterId : 'Глава на сайте не определена — выберите';
     const noneOpt = document.createElement('option');
@@ -1678,11 +1696,10 @@ function renderPlan() {
     };
     const status = document.createElement('span');
     status.className = 'ru-pr-status';
-
-    cell.append(select, status);
-
-    const chrf = document.createElement('span');
-    chrf.className = 'ru-pr-chrf';
+    /* Результат сверки печатается в подписи под списком, рядом со статусом
+       строки: измеренное относится к этой главе, а не к отдельной колонке. */
+    const score = document.createElement('span');
+    score.className = 'ru-pr-score';
 
     /* Проверка одной главы — кнопкой на строке: сверка идёт там, где виден
        результат этой строки, и не требует выделять ничего заранее. Весы
@@ -1705,10 +1722,16 @@ function renderPlan() {
       + '<path fill="currentColor" d="M10.7 6.1h4.4a2.2 2.2 0 0 1-4.4 0Z"/></svg>'));
     probe.onclick = () => checkRow(row);
 
+    pick.append(select, probe);
+    const meta = document.createElement('div');
+    meta.className = 'ru-pr-meta';
+    meta.append(score, status);
+    cell.append(pick, meta);
+
     const tr = document.createElement('div');
     tr.className = 'ru-plan-row ' + planRowClass(row, planRowRange(row, rangeSet) !== '');
-    tr.append(num, title, arrow, cell, chrf, probe);
-    paintRow(row, tr, chrf, status, rangeSet);
+    tr.append(num, title, arrow, cell);
+    paintRow(row, tr, score, status, rangeSet);
     list.appendChild(tr);
   }
 
@@ -1963,5 +1986,5 @@ async function launch() {
 
 $('ru-start').onclick = () => launch();
 
-log('Готово. Выберите .txt — план построится сам.', 'ok');
+log('Готово. Выберите файл с главами — план построится сам.', 'ok');
 })();

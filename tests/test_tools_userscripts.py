@@ -249,8 +249,8 @@ def test_rulate_panel_invariants():
         "на мобильном у лога нет своего потолка высоты"
     assert "#ru-bulk .ru-pr-title { flex: 1 1 auto; order: 1; }" in text, \
         "на мобильном название главы не делит строку с галочкой"
-    assert "#ru-bulk .ru-pr-probe { order: 3; }" in text, \
-        "на мобильном кнопка сверки не встала справа от названия"
+    assert "#ru-bulk .ru-pr-tgt { order: 3; flex: 1 1 100%; }" in text, \
+        "на мобильном колонка сайта не встаёт под названием отдельной строкой"
 
     # ── логика, которая не должна пострадать от переделки вида ──
     assert 'id="ru-plan-filter"' in text, "фильтр плана не список"
@@ -266,9 +266,35 @@ def test_rulate_panel_invariants():
         "у кнопки сверки нет иконки"
 
     # чекбоксов в плане нет: строку не выделяют, а льют или пропускают
-    assert "tr.append(num, title, arrow, cell, chrf, probe);" in text, \
+    assert "tr.append(num, title, arrow, cell);" in text, \
         "в строке плана снова галочка выделения"
     assert "type = 'checkbox'" not in text, "в таблице плана вернулись чекбоксы"
+
+    # весы стоят справа от списка выбора главы, а не в конце строки
+    assert "pick.append(select, probe);" in text, \
+        "кнопка сверки вынесена из колонки списка: она должна стоять справа от списка"
+    assert "cell.append(pick, meta);" in text, "колонка сайта собрана не из списка и подписи"
+    assert "#ru-bulk .ru-pr-pick { display: flex; align-items: center; gap: 5px; }" in text, \
+        "нет раскладки «список с весами в одну полосу»"
+    assert "#ru-bulk .ru-pr-pick select { flex: 1 1 auto; min-width: 0; }" in text, \
+        "список не тянется на всю ширину полосы рядом с весами"
+
+    # итог сверки печатается под списком, словом и числом вместе
+    assert "scoreEl.textContent = label + score;" in text, \
+        "коэффициент сверки не печатается под списком одной подписью"
+    assert "const score = rep && rep.chrf != null ? ' · ' + rep.chrf.toFixed(2) : '';" in text, \
+        "коэффициент не склеен с оценкой («Похожа · 1.00»)"
+    assert "meta.append(score, status);" in text, "подпись под списком собрана не из оценки и статуса"
+
+    # шапка плана отцентрована и повторяет сетку строки
+    assert "#ru-bulk .ru-plan-head .ru-pr-title, #ru-bulk .ru-plan-head .ru-pr-tgt { text-align: center; }" in text, \
+        "подписи колонок плана не по центру"
+    assert '<span class="ru-pr-num"></span>' in text, \
+        "шапка не повторяет сетку строки: подписи съедутся относительно колонок"
+
+    # «Показывать:» не наезжает на таблицу
+    assert "#ru-bulk .ru-plan-hd { gap: 8px; margin-bottom: 10px !important; }" in text, \
+        "у строки «Показывать:» нет отступа от таблицы плана"
 
     # шапка таблицы подписана
     assert "В файле" in text and "На сайте" in text, "у колонок плана нет подписей"
@@ -294,7 +320,7 @@ def test_rulate_panel_invariants():
 
     # статус строки лежит в колонке под своим списком выбора
     assert "#ru-bulk .ru-pr-tgt" in text, "статус строки вынесен из колонки списка"
-    assert "cell.append(select, status);" in text, \
+    assert "cell.append(pick, meta);" in text, \
         "статус не в колонке списка: подпись уезжает от своего выбора"
 
     # прогресс: проценты и остаток времени под полосой
