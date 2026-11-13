@@ -1048,9 +1048,10 @@ html.dark-theme #ru-bulk, body.dark-theme #ru-bulk {
   border-color: var(--dark-border-primary, #404040);
 }
 #ru-bulk.ru-open { display: flex; flex-direction: column; }
-/* Высота ограничена, прокрутка внутри тела: на книге в 600 глав таблица
-   плана иначе растянула бы страницу на десятки экранов. */
-#ru-bulk { max-height: min(70vh, 720px); }
+/* Панель растёт по содержимому и своей прокрутки не имеет: при выборе файла
+   появляется план, и вместо новой полосы прокрутки панель просто становится
+   выше. Прокрутка есть только там, где содержимое заведомо безразмерное, —
+   в окне лога и в таблице плана. */
 
 #ru-bulk .ru-hd {
   flex: 0 0 auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -1077,7 +1078,7 @@ html.dark-theme #ru-bulk .ru-run-warn svg, body.dark-theme #ru-bulk .ru-run-warn
 html.dark-theme #ru-bulk .ru-hd .ru-ver, body.dark-theme #ru-bulk .ru-hd .ru-ver { color: var(--dark-text-muted, #888); }
 
 #ru-bulk .ru-bd {
-  flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  flex: 1 1 auto;
   padding: 10px 12px; display: flex; flex-direction: column;
 }
 #ru-bulk .ru-bd > * { flex: 0 0 auto; }
@@ -1099,10 +1100,10 @@ html.dark-theme #ru-bulk button:hover:not(:disabled), body.dark-theme #ru-bulk b
 html.dark-theme #ru-bulk button.ru-go, body.dark-theme #ru-bulk button.ru-go { background: #2e9e5b; border-color: #27864c; color: #fff; }
 
 #ru-bulk .ru-log-box {
-  /* 220px — это примерно десять строк лога: шапка запуска, список глав
-     и строка «вне диапазона» помещаются без прокрутки, а на длинном
-     прогоне лог растёт дальше вместе с панелью. */
-  flex: 1 1 auto; min-height: 220px; overflow: auto !important;
+  /* 220px — примерно десять строк лога: шапка запуска и первые главы
+     читаются без прокрутки; дальше лог прокручивается сам и выше 320px
+     не растёт, иначе длинный прогон растянул бы панель на экран. */
+  flex: 0 0 auto; min-height: 220px; max-height: 320px; overflow: auto !important;
   background: #fafafa; border: 1px solid #ddd; border-radius: 4px;
   padding: 7px !important; margin: 8px 0 0 0 !important;
   font: 11.5px/1.45 ui-monospace, Menlo, Consolas, monospace !important;
@@ -1191,7 +1192,7 @@ html.dark-theme #ru-bulk .ru-pr-chrf.ru-good, body.dark-theme #ru-bulk .ru-pr-ch
 /* Мобильный: строки плана в две колонки, поля на всю ширину, кнопки крупнее
    (палец точнее мыши не попадает). Название и номер в одну строку. */
 @media (max-width: 640px) {
-  #ru-bulk { max-height: none; }
+  #ru-bulk .ru-log-box { max-height: 260px; }
   #ru-bulk .ru-hd { padding: 8px 10px; }
   #ru-bulk .ru-bd { padding: 10px; }
   #ru-bulk .ru-plan-list { max-height: 50vh; }
@@ -1215,21 +1216,25 @@ html.dark-theme #ru-bulk .ru-pr-chrf.ru-good, body.dark-theme #ru-bulk .ru-pr-ch
    поверх страницы: человек работает с главами, и панель должна быть на том
    же месте, что и они. Нет такого блока (другая разметка, мобильная
    версия) — остаётся тело страницы, панель всё равно доступна. */
-/* Кнопка «Добавить главы» есть только у владельца книги — рядом с ней и
-   место нашей кнопки: обе про одно действие, и человек ищет их вместе.
-   Классы берём у неё же, поэтому размер шрифта и высота совпадают без
-   подгонки под тему и версию сайта. Нет такой кнопки (читатель, а не
-   автор) — остаётся блок действий над таблицей. */
-function findAddChaptersButton() {
+/* Кнопка-образец: своя встаёт сразу за ней и берёт её классы, поэтому
+   размер шрифта и высота совпадают без подгонки под тему и версию сайта.
+   Сначала ищем «Связанные переводы» — там просят место; если её нет (книга
+   без связанных переводов), годится «Добавить главы». Обе бывают только у
+   автора перевода: у читателя остаётся блок действий над таблицей глав. */
+function findSiteButton(patterns) {
   for (const el of document.querySelectorAll('a, button')) {
     const t = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    if (!t.startsWith('добавить глав')) continue;
+    if (!patterns.some(re => re.test(t))) continue;
     /* Только кнопка рядом с оглавлением, а не ссылка в меню страницы. */
     if (el.closest('#Chapters, .for_table_container, .chapter-controls')) return el;
     if (document.querySelector('#Chapters') && el.parentNode &&
         !el.closest('.navbar, .nav, #header, .menu')) return el;
   }
   return null;
+}
+
+function findAddChaptersButton() {
+  return findSiteButton([/^связанные переводы/, /^добавить глав/]);
 }
 
 function findChapterAnchor() {
@@ -1320,29 +1325,31 @@ toggleBtn.setAttribute('aria-expanded', 'false');
 toggleBtn.setAttribute('aria-controls', 'ru-bulk');
 
 {
-  /* Кнопка сайта «Добавить главы» есть только у владельца книги: у неё
-     берём и место, и оформление — размер шрифта, отступы и высоту задаёт
-     её собственный CSS, подгонять под тему не нужно. */
-  const addBtn = findAddChaptersButton();
-  if (addBtn && addBtn.parentNode) {
-    toggleBtn.className = addBtn.className || 'btn btn-default';
-    addBtn.parentNode.insertBefore(toggleBtn, addBtn.nextSibling);
-    addBtn.parentNode.insertBefore(panel, toggleBtn.nextSibling);
-  } else {
-    /* Читатель или другая разметка: кнопка и панель — прямо перед таблицей
-       глав, в том же контейнере, иначе ширина панели разойдётся с шириной
-       таблицы. Кнопка вставляется первой, поэтому при открытии панели она
-       остаётся сверху, а не прыгает под неё. */
-    const { table, box } = findChapterAnchor();
-    if (table && table.parentNode) {
-      table.parentNode.insertBefore(toggleBtn, table);
-      table.parentNode.insertBefore(panel, table);
-    } else {
-      const host = (box && box.parentNode) || document.body;
-      host.insertBefore(panel, host.firstChild);
-      document.body.insertBefore(toggleBtn, panel);
-    }
+  /* Кнопка сайта — образец оформления и место для нашей кнопки: её просят
+     сразу после «Связанные переводы». Панель же ставится отдельным блоком
+     во всю ширину, иначе она получила бы ширину контейнера кнопок и таблица
+     глав рядом с ней показалась бы уже. */
+  const siteBtn = findAddChaptersButton();
+  if (siteBtn && siteBtn.parentNode) {
+    toggleBtn.className = siteBtn.className || 'btn btn-default';
+    siteBtn.parentNode.insertBefore(toggleBtn, siteBtn.nextSibling);
   }
+
+  const { table, box } = findChapterAnchor();
+  if (table && table.parentNode) {
+    /* Панель — прямо перед таблицей глав, в том же контейнере: ширина
+       совпадает с таблицей. */
+    table.parentNode.insertBefore(panel, table);
+  } else {
+    const host = (box && box.parentNode) || document.body;
+    host.insertBefore(panel, host.firstChild);
+  }
+
+  if (!toggleBtn.parentNode) {
+    /* Образца нет (читатель): кнопка — над панелью, в том же контейнере. */
+    panel.parentNode.insertBefore(toggleBtn, panel);
+  }
+
   /* Кнопки внутри панели лежат в <form action="…/subscribe">, внутри
      которого стоит таблица глав: кнопка без type отправила бы форму и
      увела страницу. Своей кнопке-переключателю type ставится при создании;
@@ -1658,6 +1665,7 @@ async function checkRows() {
   aborted = false;
   setBusy(true);
 
+  try {
   for (let i = 0; i < targets.length; i++) {
     if (aborted) { log('Проверка остановлена.', 'warn'); break; }
     const row = targets[i];
@@ -1665,9 +1673,15 @@ async function checkRows() {
     const ch = parsed[row.fi];
     try {
       /* Проверяем ту главу, которую предлагает план: выбранную, иначе первого
-         кандидата по номеру. Строка «не найдена» проверке не подлежит. */
+         кандидата. Строку без главы сайта проверять не на чем — и это надо
+         сказать в логе: молча пропущенная строка выглядит как зависшая
+         проверка, ведь её номер в ленте не появляется. */
       const probe = row.site || row.cands[0];
-      if (!probe) { reports.set(row.fi, { status: 'нечего проверять', chrf: null }); continue; }
+      if (!probe) {
+        reports.set(row.fi, { status: 'нечего проверять', chrf: null });
+        log(`[${i + 1}/${targets.length}] «${ch.title}» — главы на сайте нет, проверять нечего (выберите её в плане).`, 'warn');
+        continue;
+      }
       const { html, doc } = await getDoc(siteUrl(bookIdFromUrl(), probe.chapterId));
       await globalPause(CFG.intraMs, 0);
       const userId = userIdFromHtml(html);
@@ -1682,15 +1696,23 @@ async function checkRows() {
       log(`[${i + 1}/${targets.length}] «${ch.title}» ↔ id=${probe.chapterId}: chrF ${res.chrf.toFixed(3)} — ${verdict === 'off' ? 'порог не задан, судить нечем' : verdict === 'good' ? 'та же глава' : 'НЕ та глава'}`, verdict === 'bad' ? 'err' : 'ok');
       renderPlan();
     } catch (e) {
+      /* Причина человеческим текстом: у fetch-сбоя message бывает пустым
+         («Failed to fetch» приходит как TypeError без текста), и строка
+         «ошибка:» без причины ничего не объясняет. */
+      const why = (e && (e.message || e.name)) || String(e) || 'неизвестная причина';
       reports.set(row.fi, { status: 'ошибка', chrf: null });
-      log(`[${i + 1}/${targets.length}] «${ch.title}» — ошибка: ${e.message}`, 'err');
+      log(`[${i + 1}/${targets.length}] «${ch.title}» — ошибка: ${why}`, 'err');
     }
     await globalPause(CFG.dryMs, 0);
   }
   ui.setProgress(targets.length, targets.length);
   log('=== ПРОВЕРКА ЗАВЕРШЕНА ===', 'ok');
-  setBusy(false);
-  renderPlan();
+  } finally {
+    /* Кнопки разблокируются при любом исходе: поломка на одной строке не
+       должна оставлять «Старт» и «Стоп» в положении «идёт работа». */
+    setBusy(false);
+    renderPlan();
+  }
 }
 
 /* ---------- события таблицы ---------- */

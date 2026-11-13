@@ -199,9 +199,11 @@ def test_rulate_panel_invariants():
     assert "className = 'btn btn-default'" in text, \
         "кнопка не в стиле сайта (btn btn-default, как «Выбрать диапазон» рядом)"
     assert "table.parentNode.insertBefore(panel, table)" in text, \
-        "панель не вставлена перед таблицей глав"
-    assert "table.parentNode.insertBefore(toggleBtn, table)" in text, \
-        "кнопка не встала над таблицей глав"
+        "панель не вставлена перед таблицей глав: её ширина разойдётся с таблицей"
+    assert "siteBtn.parentNode.insertBefore(toggleBtn, siteBtn.nextSibling)" in text, \
+        "кнопка не встала сразу за кнопкой сайта («Связанные переводы»)"
+    assert "panel.parentNode.insertBefore(toggleBtn, panel)" in text, \
+        "без кнопки-образца наша кнопка не встала над панелью"
     assert "#ru-bulk.ru-open { display: flex" in text, \
         "нет состояния «показана»: кнопка не сможет открыть панель"
     assert "function setPanelOpen(open)" in text, "нет переключателя панели"
@@ -230,16 +232,17 @@ def test_rulate_panel_invariants():
         "план не строится сам при открытии панели"
 
     # ── прокрутка и высота ──
-    assert re.search(r"#ru-bulk \{[^}]*max-height: min\(70vh, 720px\)", text), \
-        "высота панели не ограничена: книга на 600 глав растянет страницу"
-    assert re.search(r"#ru-bulk \.ru-bd \{[^}]*overflow-y: auto", text), \
-        "у тела панели нет своей прокрутки"
+    assert "max-height: min(70vh, 720px)" not in text, \
+        "у панели снова потолок высоты: при появлении плана появится её прокрутка"
+    assert not re.search(r"#ru-bulk \.ru-bd \{[^}]*overflow-y: auto", text), \
+        "у тела панели снова своя прокрутка: панель должна расти по содержимому"
     assert re.search(r"#ru-bulk \.ru-plan-list \{[^}]*max-height: min\(42vh, 420px\)", text), \
         "у таблицы плана нет своей прокрутки"
 
     # ── мобильный вид ──
     assert "@media (max-width: 640px)" in text, "нет мобильной раскладки"
-    assert "max-height: none" in text, "на мобильном панель остаётся с потолком высоты"
+    assert "#ru-bulk .ru-log-box { max-height: 260px; }" in text, \
+        "на мобильном у лога нет своего потолка высоты"
     assert "#ru-bulk .ru-pr-title { flex: 1 1 auto; order: 1; }" in text, \
         "на мобильном название главы не делит строку с галочкой"
     assert "#ru-bulk .ru-plan-row > input[type=checkbox] { order: 0; }" in text, \
@@ -276,10 +279,10 @@ def test_rulate_panel_invariants():
     assert "progressMarks.length = 0;" in text, "отметки темпа не сбрасываются перед прогоном"
 
     # ── кнопка стоит после «Добавить главы» и в её оформлении ──
-    assert "function findAddChaptersButton()" in text, "нет поиска кнопки «Добавить главы»"
-    assert "addBtn.parentNode.insertBefore(toggleBtn, addBtn.nextSibling)" in text, \
-        "кнопка не встала сразу после «Добавить главы»"
-    assert "toggleBtn.className = addBtn.className || 'btn btn-default'" in text, \
+    assert "function findSiteButton(patterns)" in text, "нет поиска кнопки-образца сайта"
+    assert "/^связанные переводы/" in text, "кнопка не привязана к «Связанные переводы»"
+    assert "/^добавить глав/" in text, "нет запасного ориентира «Добавить главы»"
+    assert "toggleBtn.className = siteBtn.className || 'btn btn-default'" in text, \
         "оформление не взято у кнопки сайта: размер шрифта разойдётся"
 
     # ── таблица глав лежит внутри <form …/subscribe>: кнопки не должны её слать ──
@@ -295,6 +298,10 @@ def test_rulate_panel_invariants():
     # ── лог: высоты хватает на шапку прогона ──
     assert re.search(r"#ru-bulk \.ru-log-box \{[^}]*min-height: 220px", text), \
         "лог снова низкий: строки запуска не помещаются"
+    assert re.search(r"#ru-bulk \.ru-log-box \{[^}]*max-height: 320px", text), \
+        "у лога нет потолка: длинный прогон растянет панель на экран"
+    assert re.search(r"#ru-bulk \.ru-log-box \{[^}]*overflow: auto", text), \
+        "лог не прокручивается: строки уйдут под нижний край"
 
     # ── «Скачать лог» снята ──
     assert 'id="ru-log-dl"' not in text, "вернулась кнопка «Скачать лог»"
