@@ -199,6 +199,13 @@ def test_rulate_panel_invariants():
     assert re.search(r"#ru-bulk \.ru-hd \{[^}]*flex: 0 0 auto", text), \
         "шапка сжимается: кнопки пропадут из виду"
     assert 'id="ru-grip"' in text, "нет уголка для изменения размера"
+    # за левый верхний угол тянут и размер, и положение: правый-нижний
+    # остаётся на месте, иначе панель растёт вбок от курсора
+    assert 'id="ru-grip-nw"' in text, "нет уголка для изменения размера за левый верхний угол"
+    nw = re.search(r"if \(mode === 'resize-nw'\) \{(.*?)\n    \}", text, re.S)
+    assert nw, "ресайз за левый верхний угол не обрабатывается отдельно"
+    assert "ol + ow - size.w" in nw.group(1) and "ot + oh - size.h" in nw.group(1), \
+        "левый верхний угол не держит правый нижний на месте"
     # размер и положение — привычка устройства, план — свойство книги
     assert re.search(r"localStorage\.(setItem|getItem)\(UI_KEY", text), "размер панели не запоминается"
     assert "'rlPlan:'" in text, "план перестал быть привязан к книге"

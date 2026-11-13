@@ -89,7 +89,8 @@ function boot(site) {
     BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, planMatches, run, chrf, looksLikeSameChapter,'
       + ' buildPlan, planAssign, planToData, planFromData, planToText, applyOverrides, collectOverrides, writePlan,'
       + ' planSkipSelected, planResetSelected, planAlignByOrder, parseChrfThreshold,'
-      + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange };',
+      + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange,'
+      + ' titleCore, titleScore, rankCandidates, TITLE_SIMILAR_MIN };',
   )(
     document,
     { pathname: `/book/${BOOK}`, origin: 'https://tl.rulate.ru' },
@@ -674,4 +675,52 @@ test('rulate: глава без номера не теряется без «Titl
   assert.equal(odd.site, null);
   assert.equal(odd.how, 'нет');
   assert.ok(parsed.length >= 2);
+});
+
+/* ── подбор кандидатов по названию (chrF) ── */
+
+test('rulate: ядро названия отбрасывает «Глава N.»', () => {
+  const { api } = boot([]);
+  assert.equal(api.titleCore('Глава 12. Битва у реки'), 'Битва у реки');
+  assert.equal(api.titleCore('Глава 1.'), '', 'только префикс — ядра нет');
+  assert.equal(api.titleCore('Том 2: Прибытие'), 'Прибытие');
+  assert.equal(api.titleCore('Chapter 5 — The End'), 'The End');
+  assert.equal(api.titleCore('Пролог. Начало'), 'Пролог. Начало', 'без префикса — целиком');
+});
+
+test('rulate: chrF названий ставит родственное название выше чужого', () => {
+  const { api } = boot([]);
+  const near = api.titleScore('Глава 1. Битва у реки', 'Глава 1. Битва на реке');
+  const far = api.titleScore('Глава 1. Битва у реки', 'Глава 1. Совет старейшин');
+  assert.ok(near > far, `родственное (${near.toFixed(2)}) должно быть выше чужого (${far.toFixed(2)})`);
+  assert.equal(api.titleScore('Глава 3. Имя', 'Глава 3. Имя'), 1, 'одно название — 1.0');
+});
+
+test('rulate: кандидаты отсортированы по похожести, но решает человек', async () => {
+  /* Главное свойство: счёт — ПОДСКАЗКА. Автовыбора нет, все кандидаты на
+     месте, иначе однажды перевод уедет в чужую главу «по наибольшему счёту». */
+  const site = [
+    { id: 11, title: 'Глава 1. Совет старейшин', text: 'с1' },
+    { id: 12, title: 'Глава 1. Битва на реке', text: 'с2' },
+    { id: 13, title: 'Глава 1. Дополнительная глава', text: 'с3' },
+  ];
+  const { api, plan } = await planFor(site, ['# [Глава 1. Битва у реки :|: 1]', 'н1']);
+  const [row] = plan.rows;
+  const ranked = api.rankCandidates(row.title, row.cands);
+  assert.equal(ranked[0].chapterId, '12', 'ближайшее название — первым');
+  assert.equal(ranked.length, 3, 'все кандидаты остаются, никто не выброшен');
+  assert.equal(row.site, null, 'подбор по названию не назначает главу сам');
+  assert.ok(ranked[0].same, 'родственное название помечено как внятное');
+  assert.equal(ranked[ranked.length - 1].same, false, 'чужое название не притворяется похожим');
+});
+
+test('rulate: счёт не показывается у непохожих названий', () => {
+  const { api } = boot([]);
+  const site = [
+    { chapterId: '11', siteTitle: 'Глава 9. Совсем о другом' },
+    { chapterId: '12', siteTitle: 'Глава 9. Ещё о разном' },
+  ];
+  const ranked = api.rankCandidates('Глава 9. Битва у реки', site);
+  assert.ok(ranked.every((c) => !c.same), 'низкий счёт не выдаётся за похожесть');
+  assert.ok(ranked.every((c) => c.score < api.TITLE_SIMILAR_MIN));
 });
