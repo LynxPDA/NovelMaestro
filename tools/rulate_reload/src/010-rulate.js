@@ -414,6 +414,71 @@ async function removeFragment(bookId, chapterId, origId) {
   return data;
 }
 
+/* ---------- массовое удаление фрагментов ----------
+
+   У владельца книги на её странице есть форма массовых действий
+   (`action=".../massAction"`, чекбоксы `o[]`, кнопка «Удалить фрагменты»):
+   один POST удаляет сколько угодно фрагментов. Это единственный путь,
+   которым глава из тридцати фрагментов снимается ОДНИМ запросом; удаление
+   по одному (`orig.rm`) требует запроса на каждый и на большой книге
+   превращается в тысячи обращений.
+
+   Поля формы не хардкодятся, а читаются со страницы: имя кнопки и скрытые
+   поля — часть сайта, а промах здесь необратим. Нет формы (не владелец,
+   другой шаблон страницы) — вызывающий код уходит в пофрагментное
+   удаление, которое умеет страница главы. */
+function massDeleteForm(root) {
+  for (const f of root.querySelectorAll('form')) {
+    const action = f.getAttribute('action') || '';
+    if (!/massAction/.test(action)) continue;
+    /* Чекбоксы `o[]` в форме искать не нужно: какие фрагменты снимать, знает
+       скрипт, — он и перечисляет их сам. Нужны только скрытые поля (CSRF) и
+       кнопка. Требование чекбоксов внутри формы отсекало бы форму, где они
+       нарисованы в строках таблицы. */
+    if (!massDeleteButton(f)) continue;
+    return f;
+  }
+  return null;
+}
+
+/* Кнопка удаления оригинала внутри массовой формы. Берётся по подписи, а не
+   по имени: подпись человек видит на экране, имя поля может смениться. */
+function massDeleteButton(form) {
+  const nodes = form.querySelectorAll('button, input[type="submit"], input[type="button"]');
+  for (const b of nodes) {
+    const name = b.getAttribute('name') || '';
+    if (!name) continue;
+    const label = (b.textContent || b.getAttribute('value') || '').trim();
+    if (/удалить фрагмент/i.test(label)) return { name, value: b.getAttribute('value') || '1' };
+  }
+  return null;
+}
+
+/* Удаление набора фрагментов одной операцией.
+
+   Возвращает true, если массовая форма есть и запрос прошёл, и false, если
+   формы нет — тогда решает вызывающий. Скрытые поля формы повторяются как
+   есть: там лежит `YII_CSRF_TOKEN` и прочее, без чего сайт запрос отвергнет. */
+async function removeFragmentsBulk(root, origIds) {
+  const form = massDeleteForm(root);
+  if (!form) return false;
+  const btn = massDeleteButton(form);
+  if (!btn) return false;
+
+  const fd = new FormData();
+  form.querySelectorAll('input[type="hidden"]').forEach(i => {
+    const n = i.getAttribute('name');
+    if (n) fd.append(n, i.value);
+  });
+  for (const id of origIds) fd.append('o[]', id);
+  fd.append(btn.name, btn.value);
+  fd.append('ajax', '1');
+  const res = await fetch(form.getAttribute('action') || '/orig/massAction',
+    { method: 'POST', credentials: 'include', body: fd });
+  if (!res.ok) throw new Error('POST massAction ' + res.status);
+  return true;
+}
+
 /* ---------- POST смены названия главы ---------- */
 async function saveChapterTitle(bookId, chapterId, newTitle, csrf) {
   const editUrl = `/book/${bookId}/${chapterId}/edit`;
@@ -990,12 +1055,38 @@ async function writePlan(plan, parsed, opts, ui) {
             await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);
             ui.log(`     текст залит в первый фрагмент (${ch.text.length}с)`, 'ok');
             await globalPause(CFG.intraMs, CFG.jitterMs);
-            for (let i = pairs.length - 1; i >= 1; i--) {
-              if (ui.aborted) { ui.log('     остановлено: удаление фрагментов не завершено', 'warn'); break; }
-              await removeFragment(plan.bookId, info.chapterId, pairs[i].origId);
-              ui.log(`     фрагмент ${i + 1}/${pairs.length} удалён (остаётся ${i})`, 'plain');
-              st.fragRemoved++;
-              if (i > 1) await globalPause(CFG.delMs, CFG.jitterMs);
+
+            /* Лишние фрагменты удаляются ОДНИМ запросом через массовую форму
+               страницы книги. Пофрагментный путь нужен только там, где формы
+               нет (не владелец книги): он дороже — запрос на каждый
+               фрагмент, — но страница главы его умеет всегда. */
+            /* С конца главы к началу: первый фрагмент остаётся под новый
+               текст, остальные снимаются последними первыми. */
+            const extraIds = pairs.slice(1).map(p2 => p2.origId).reverse();
+            let bulk = false;
+            if (extraIds.length) {
+              try {
+                bulk = await removeFragmentsBulk(doc, extraIds);
+              } catch (e) {
+                bulk = false;
+                ui.log(`     массовое удаление не прошло (${e.message}), удаляю по одному`, 'warn');
+              }
+            }
+            if (bulk) {
+              st.fragRemoved += extraIds.length;
+              ui.log(`     фрагментов удалено одним запросом: ${extraIds.length}`, 'ok');
+            } else {
+              if (extraIds.length) ui.log('     массовой формы нет — удаляю по одному', 'plain');
+              /* Порядок — как в `extraIds`: с конца главы к началу. Так
+                 лог читается сверху вниз («остаётся» убывает), а обрыв
+                 посередине оставляет целой голову главы, а не хвост. */
+              for (let i = 0; i < extraIds.length; i++) {
+                if (ui.aborted) { ui.log('     остановлено: удаление фрагментов не завершено', 'warn'); break; }
+                await removeFragment(plan.bookId, info.chapterId, extraIds[i]);
+                st.fragRemoved++;
+                ui.log(`     удалён фрагмент ${extraIds[i]} (остаётся ${extraIds.length - i - 1})`, 'plain');
+                if (i < extraIds.length - 1) await globalPause(CFG.delMs, CFG.jitterMs);
+              }
             }
           } else {
           await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);

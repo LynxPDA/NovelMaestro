@@ -272,9 +272,10 @@ test('rulate: одна и та же глава дважды в файле — в
 
 /** Сайт с главой, разбитой на несколько фрагментов: у каждого свой orig и
  *  свой tr_id. Журналы запросов показывают, что удалялось и что заливалось. */
-function bootFrag(nFrag, { onAsk } = {}) {
+function bootFrag(nFrag, { mass = false } = {}) {
   const posts = [];
   const removed = [];
+  const massCalls = [];
   const asked = [];
   const fragIds = Array.from({ length: nFrag }, (_, i) => ({ origId: String(500 + i), trId: String(900 + i) }));
 
@@ -285,8 +286,23 @@ function bootFrag(nFrag, { onAsk } = {}) {
   const savedEls = new Map(fragIds.map((f) => [`t${f.trId}`,
     { id: `t${f.trId}`, querySelector: () => ({ innerHTML: `старый абзац ${f.trId}` }) }]));
 
+  /* Массовая форма владельца книги: чекбоксы `o[]`, скрытый CSRF и кнопка
+     «Удалить фрагменты». Тест доказал, что скрипт находит её сам. */
+  const massBtn = { getAttribute: (n) => (n === 'name' ? 'delorig' : n === 'value' ? '1' : null), textContent: 'Удалить фрагменты' };
+  const massForm = {
+    getAttribute: (a) => (a === 'action' ? '/orig/massAction' : null),
+    querySelector: (sel) => (sel === '[name="o[]"]' ? {} : null),
+    querySelectorAll: (sel) => {
+      if (sel === 'input[type="hidden"]') {
+        return [{ getAttribute: (n) => (n === 'name' ? 'YII_CSRF_TOKEN' : null), value: 'CSRF' }];
+      }
+      if (sel.startsWith('button')) return [massBtn];
+      return [];
+    },
+  };
   const chapDoc = {
-    querySelectorAll: (sel) => (sel === 'tr[id^="o"]' ? rows : []),
+    querySelectorAll: (sel) => (sel === 'tr[id^="o"]' ? rows
+      : sel === 'form' && mass ? [massForm] : []),
     querySelector: (sel) => (sel.includes('csrf') ? { content: 'CSRF' } : null),
     getElementById: (id) => savedEls.get(id) || null,
   };
@@ -299,6 +315,11 @@ function bootFrag(nFrag, { onAsk } = {}) {
 
   const fetchStub = async (url, init) => {
     const u = String(url);
+    if (init && init.method === 'POST' && /massAction$/.test(u)) {
+      const ids = init.body && init.body.d ? [...init.body.d.entries()].filter(([k]) => k === 'o[]').flatMap(([, v]) => v) : [];
+      massCalls.push({ url: u, ids });
+      return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
+    }
     if (init && init.method === 'POST' && /\/remove$/.test(u)) {
       removed.push((u.match(/\/(\d+)\/remove$/) || [])[1]);
       return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
@@ -330,7 +351,11 @@ function bootFrag(nFrag, { onAsk } = {}) {
     { pathname: `/book/${BOOK}`, origin: 'https://tl.rulate.ru' },
     fetchStub,
     Parser,
-    class { constructor() { this.d = new Map(); } append(k, v) { this.d.set(k, v); } },
+    class {
+      constructor() { this.d = new Map(); }
+      append(k, v) { if (!this.d.has(k)) this.d.set(k, []); this.d.get(k).push(v); }
+      entries() { return this.d.entries(); }
+    },
     class {},
   );
   api.CFG.minChrf = 0.75;
@@ -339,14 +364,14 @@ function bootFrag(nFrag, { onAsk } = {}) {
   api.CFG.delMs = 0;
   api.CFG.verify = false;
   api.CFG.multiFragment = 'merge';
-  return { api, posts, removed, asked };
+  return { api, posts, removed, massCalls, asked };
 }
 
 const fragFile = (n) => ['# [Глава 1. Заголовок :|: 1]',
   ...Array.from({ length: n }, (_, i) => `Новый текст ${i + 1}.`)].join('\n');
 
-const fragRun = async (n, { ask, opts } = {}) => {
-  const st = bootFrag(n);
+const fragRun = async (n, { ask, opts, mass } = {}) => {
+  const st = bootFrag(n, { mass });
   const parsed = st.api.parseChaptersFile(fragFile(n));
   const site = await st.api.buildSiteMap(String(BOOK));
   const plan = st.api.buildPlan(parsed, site);
@@ -370,6 +395,27 @@ test('фрагменты: текст ложится в первый, лишни�
   assert.equal(res.saved, 1);
   assert.equal(asked.length, 1, 'согласие спрашивается один раз за прогон');
   assert.equal(asked[0].count, 3, 'в окне должно быть видно число фрагментов');
+});
+
+test('фрагменты: при массовой форме все лишние снимаются ОДНИМ запросом', async () => {
+  /* У владельца книги на странице главы есть форма массовых действий:
+     `o[]` списком снимает сколько угодно фрагментов за один POST. Сорок
+     фрагментов — это сорок запросов пофрагментно против одного, и разница
+     решает, упрётся ли книга в антиспам. */
+  const { posts, removed, massCalls, res } = await fragRun(4, { ask: 'merge', mass: true });
+  assert.deepEqual(posts, ['500'], 'текст по-прежнему уходит только в первый фрагмент');
+  assert.equal(massCalls.length, 1, 'массовое удаление должно быть одним запросом');
+  assert.deepEqual(massCalls[0].ids, ['503', '502', '501'], 'лишние перечислены списком, с конца');
+  assert.deepEqual(removed, [], 'пофрагментный путь при наличии формы не трогается');
+  assert.equal(res.fragRemoved, 3);
+});
+
+test('фрагменты: без массовой формы остаётся пофрагментное удаление', async () => {
+  /* Не владелец книги: формы нет, но страница главы умеет `orig.rm`.
+     Порядок — с конца, чтобы обрыв посередине оставил целой голову главы. */
+  const { removed, massCalls } = await fragRun(3, { ask: 'merge', mass: false });
+  assert.deepEqual(massCalls, [], 'формы нет — массового запроса быть не может');
+  assert.deepEqual(removed, ['502', '501']);
 });
 
 test('фрагменты: chrF на разбитой главе не отказывает', async () => {

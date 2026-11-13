@@ -407,8 +407,21 @@ def test_rulate_panel_invariants():
         "нет удаления лишних фрагментов: глава останется разбитой"
     assert "`/book/${bookId}/${chapterId}/${origId}/remove`" in text, \
         "удаление идёт не тем запросом, что у сайта"
-    assert "for (let i = pairs.length - 1; i >= 1; i--)" in text, \
+    # один запрос вместо запроса на каждый фрагмент
+    assert "async function removeFragmentsBulk(root, origIds)" in text, \
+        "нет массового удаления: сорок фрагментов — сорок запросов"
+    assert "function massDeleteForm(root)" in text, \
+        "форма массовых действий не ищется на странице"
+    assert "fd.append('o[]', id);" in text, \
+        "фрагменты не перечисляются списком o[] — массовая форма так их и ждёт"
+    assert "massDeleteButton(form)" in text, \
+        "кнопка удаления не находится по подписи: имя поля может смениться"
+    # удаление с конца: первый фрагмент остаётся под новый текст
+    assert "const extraIds = pairs.slice(1).map(p2 => p2.origId).reverse();" in text, \
         "фрагменты удаляются не с конца: id остающихся сдвигаются"
+    # без формы — запасной пофрагментный путь, иначе свод не работает у переводчика
+    assert "await removeFragment(plan.bookId, info.chapterId, extraIds[i]);" in text, \
+        "нет запасного пофрагментного удаления: без массовой формы свод не работает"
     # согласие спрашивается до первого удаления, один раз за прогон
     assert "function askFragments(info)" in text, "нет окна согласия на свод"
     assert "opts.fragAnswer = answer;" in text, \
@@ -422,7 +435,7 @@ def test_rulate_panel_invariants():
         "пропущенный заслон не назван в логе: читается как «проверено»"
     # порядок записи: сначала текст, потом удаление — обрыв не оставит главу пустой
     assert text.index("await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);") \
-        < text.index("await removeFragment(plan.bookId, info.chapterId, pairs[i].origId);"), \
+        < text.index("await removeFragmentsBulk(doc, extraIds)"), \
         "удаление идёт раньше записи: обрыв оставит главу пустой"
     assert "Сводить фрагменты в один" in text, "нет галочки свода фрагментов"
     assert "CFG.multiFragment = $('ru-multi-frag').checked ? 'merge' : 'skip';" in text, \
