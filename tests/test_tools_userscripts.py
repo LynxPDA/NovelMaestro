@@ -181,6 +181,44 @@ def test_lite_reader_ui_invariants():
     assert "sawDone" in text and "без [DONE]" in text, "исчез контроль завершения ответа"
 
 
+def test_rulate_panel_invariants():
+    """Панель rulate: шапка всегда видна, размер тянется за угол, план и
+    диапазон говорят одно и то же.
+
+    Раскрытый план упирался в низ экрана, и шапка с кнопками уезжала за верхний
+    край — добраться до неё было нечем, потому что прокрутки внутри панели не
+    было. Обратный случай не менее важен: поле диапазона, которого нет в
+    заливке, — тихая потеря глав.
+    """
+    text = (TOOLS / "rulate_reload" / "rulate-bulk-update.user.js").read_text(encoding="utf-8")
+    # шапка не скроллится вместе с телом: flex-колонка, скролл в .ru-bd
+    assert re.search(r"#ru-bulk \{[^}]*display: flex; flex-direction: column", text), \
+        "панель не колонка: шапка уедет за край вместе с телом"
+    assert re.search(r"#ru-bulk \.ru-bd \{[^}]*overflow-y: auto", text), \
+        "у тела панели нет своей прокрутки"
+    assert re.search(r"#ru-bulk \.ru-hd \{[^}]*flex: 0 0 auto", text), \
+        "шапка сжимается: кнопки пропадут из виду"
+    assert 'id="ru-grip"' in text, "нет уголка для изменения размера"
+    # размер и положение — привычка устройства, план — свойство книги
+    assert re.search(r"localStorage\.(setItem|getItem)\(UI_KEY", text), "размер панели не запоминается"
+    assert "'rlPlan:'" in text, "план перестал быть привязан к книге"
+    # диапазон и план — одно правило
+    assert "const inRange = (num, set)" in text and "function planRowRange" in text, \
+        "правило диапазона разъехалось по местам"
+    assert not re.search(r"CFG\.fallbackByTitle", text), \
+        "галочка fallback вернулась: поиск по названию работает всегда"
+    assert 'id="ru-fallback-title"' not in text, "в панели остался чекбокс Title fallback"
+    assert "Проверять результат" in text, "чекбокс проверки после записи потерял название"
+    assert "> Сверка главы<" not in text, "галочка сверки вернулась: переключатель один — порог chrF"
+    assert 'id="ru-check-same"' not in text, "в панели вернулся чекбокс сверки главы"
+    # порядок в строке плана: название главы, затем её номер
+    row = re.search(r"tr\.append\(([^)]*)\);\n\s*list\.appendChild\(tr\)", text)
+    assert row, "разметка строки плана не найдена"
+    cells = [c.strip() for c in row.group(1).split(",")]
+    assert cells.index("title") < cells.index("num"), \
+        f"в строке плана первым должен идти номер: {cells}"
+
+
 def test_lite_modals_close_only_explicitly():
     """Модалки закрываются только явно: клик по подложке ловил случайные клики и
     отпускание выделения текста, выдернутое за пределы окна."""

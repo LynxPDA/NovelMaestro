@@ -88,7 +88,8 @@ function boot(site) {
     'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
     BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, planMatches, run, chrf, looksLikeSameChapter,'
       + ' buildPlan, planAssign, planToData, planFromData, planToText, applyOverrides, collectOverrides, writePlan,'
-      + ' planSkipSelected, planResetSelected, planAlignByOrder, parseChrfThreshold };',
+      + ' planSkipSelected, planResetSelected, planAlignByOrder, parseChrfThreshold,'
+      + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange };',
   )(
     document,
     { pathname: `/book/${BOOK}`, origin: 'https://tl.rulate.ru' },
@@ -107,9 +108,8 @@ function boot(site) {
   return { api, posts };
 }
 
-const run = async (site, fileLines, { fallback = false } = {}) => {
+const run = async (site, fileLines) => {
   const { api, posts } = boot(site);
-  api.CFG.fallbackByTitle = fallback;
   const parsed = api.parseChaptersFile(fileLines.join('\n'));
   const logs = [];
   await api.run(parsed, { dryRun: false, skipSame: false, rangeStr: '' },
@@ -311,7 +311,7 @@ test('rulate: план переживает новый файл — ключ э�
     '# [Пролог :|: 0]', 'н0', '',
     '# [Глава 1. История :|: 1]', 'н1', '',
     '# [Глава 2. Вторая попытка :|: 2]', 'н2',
-  ], (a) => { a.CFG.fallbackByTitle = true; });
+  ], (a) => { a.CFG.titleMode = 'off'; });
   const parsed2 = api2.parseChaptersFile([
     '# [Пролог :|: 0]', 'н0', '',
     '# [Глава 1. История :|: 1]', 'н1', '',
@@ -413,8 +413,8 @@ test('rulate: текстовый план читается глазами и с�
   ]);
   api.planAssign(plan, 1, '14');
   const text = api.planToText(plan, parsed);
-  assert.ok(text.includes('1. Глава 1. История\tid=11 «Глава 1. История»'), text);
-  assert.ok(text.includes('2. Глава 2. Вторая попытка\tid=14 «Глава 1. Дополнительная глава»\tвручную'), text);
+  assert.ok(text.includes('1. Глава 1. История\t«Глава 1. История» (id=11)'), text);
+  assert.ok(text.includes('2. Глава 2. Вторая попытка\t«Глава 1. Дополнительная глава» (id=14)\tвручную'), text);
 });
 
 test('rulate: «не найдена» из файла плана не становится «вашим решением»', async () => {
@@ -525,20 +525,21 @@ test('rulate: снятая вручную строка с кандидатами
 
 /* ── порог chrF как поле панели ── */
 
-test('rulate: порог chrF читается из поля, 0 — выключено', () => {
+test('rulate: порог chrF читается из поля; пусто и мусор — выключено', () => {
   const { api } = boot([]);
-  /* Дефолт — у сборки, а не у стенда: стенд выключает сверку для тестов
-     сопоставления, поэтому значение дефолта проверяем в исходнике. */
-  const def = api.parseChrfThreshold('');
-  assert.equal(def, 0.75, 'пустое поле — штатный порог 0.75');
   assert.equal(api.parseChrfThreshold('0.9'), 0.9);
   assert.equal(api.parseChrfThreshold('0'), 0, '0 — сверка выключена');
   assert.equal(api.parseChrfThreshold('0,8'), 0.8, 'десятичная запятая допустима');
-  assert.equal(api.parseChrfThreshold(''), def, 'пустое поле — порог по умолчанию, а не «выключено»');
-  assert.equal(api.parseChrfThreshold('   '), def);
-  assert.equal(api.parseChrfThreshold('abc'), def, 'мусор в поле не снимает заслон');
+  assert.equal(api.parseChrfThreshold(''), 0, 'пустое поле — то же, что 0: выключено');
+  assert.equal(api.parseChrfThreshold('   '), 0);
+  assert.equal(api.parseChrfThreshold('abc'), 0, 'мусор — выключено, а не потайной порог');
   assert.equal(api.parseChrfThreshold('-1'), 0, 'отрицательное — то же, что 0');
   assert.equal(api.parseChrfThreshold('5'), 1, 'выше единицы порог не бывает');
+  /* Дефолт стоит в поле панели (CFG.minChrf), а не в разборе: стенд его
+     обнуляет для тестов сопоставления, поэтому смотрим исходник. */
+  assert.match(raw, /minChrf: 0\.75/, 'порог по умолчанию пропал из CFG');
+  assert.match(raw, /id="ru-chrf" type="number" value="\$\{CFG\.minChrf\}"/,
+    'поле chrF обязано быть предзаполнено порогом из CFG');
 });
 
 test('rulate: при пороге 0 запись не отказывает, потому что сверять не с чем', async () => {
@@ -555,4 +556,122 @@ test('rulate: при пороге 0 запись не отказывает, по
     { aborted: false, log: (m) => logs.push(m), setProgress() {} });
   assert.deepEqual(posts, ['21'], 'человек выключил заслон осознанно — заливаем');
   assert.ok(!logs.some((l) => l.includes('ОТКАЗ')), logs.join('\n'));
+});
+
+/* ── диапазон глав рядом с коллизиями номеров ── */
+
+/* Сайт с коллизиями: на номер 1 и на номер 3 по две главы, пролог без номера. */
+const SITE_DUP = [
+  { id: 11, title: 'Глава 1. История', text: 'с1' },
+  { id: 14, title: 'Глава 1. Дополнительная глава', text: 'с1' },
+  { id: 12, title: 'Глава 2. Вторая попытка', text: 'с2' },
+  { id: 13, title: 'Глава 3. Третья', text: 'с3' },
+  { id: 15, title: 'Глава 3. Бонус', text: 'с3' },
+  { id: 30, title: 'Пролог. Начало', text: 'с0' },
+];
+const FILE_DUP = [
+  '# [Глава 1. Новое название :|: 1]', 'н1', '',
+  '# [Глава 2. Вторая попытка :|: 2]', 'н2', '',
+  '# [Глава 3. Тоже новое :|: 3]', 'н3', '',
+  '# [Пролог. Начало :|: 0]', 'н0',
+];
+
+test('rulate: вне диапазона строка не держит главу сайта за собой', async () => {
+  /* Строка 1 назначена вручную на главу 12 (та же, что у строки 2), но
+     строка 1 — вне диапазона 2: в этом прогоне её не пишут, и «чужой»
+     пометка у соседки — это шум от строки, которой в работе нет. */
+  const { api, posts, parsed, plan } = await planFor(SITE_DUP, FILE_DUP, (a) => { a.CFG.minChrf = 0; });
+  api.planSetRange(plan, '2');
+  api.planAssign(plan, 0, '12');
+  const rowTwo = plan.rows.find((r) => r.num === 2);
+  assert.equal(api.planRowRange(plan.rows[0], plan.rangeSet), 'вне диапазона');
+  assert.equal(rowTwo.host, '', 'строка вне диапазона не занимает главу');
+  const res = await api.writePlan(plan, parsed,
+    { dryRun: false, skipSame: false, rangeStr: '2' },
+    { aborted: false, log: () => {}, setProgress() {} });
+  assert.deepEqual(posts, ['12'], 'вне диапазона ничего не пишется');
+  assert.equal(res.saved, 1);
+  assert.equal(res.skipRange, 3, 'остальные строки — вне диапазона, а не ошибки');
+});
+
+test('rulate: вне диапазона строка не считается неоднозначной', async () => {
+  /* Номер 3 на сайте у двух глав, название не совпало — спорная строка есть,
+     но она вне диапазона 2. Раньше проверка диапазона стояла ПОСЛЕ разбора
+     спорной строки, и скрипт сообщал о неоднозначности строки, которой
+     в этом прогоне нет. */
+  const { api, posts, parsed, plan } = await planFor(SITE_DUP, FILE_DUP, (a) => { a.CFG.minChrf = 0; });
+  api.planSetRange(plan, '2');
+  const logs = [];
+  const res = await api.writePlan(plan, parsed,
+    { dryRun: false, skipSame: false, rangeStr: '2' },
+    { aborted: false, log: (m) => logs.push(m), setProgress() {} });
+  assert.deepEqual(posts, ['12']);
+  assert.equal(res.ambiguous, 0, 'спорных в работе нет');
+  assert.ok(!logs.some((l) => l.includes('НЕОДНОЗНАЧНО')), logs.join('\n'));
+  assert.ok(logs.some((l) => l.includes('вне диапазона (№3)')), 'пропуск по диапазону виден в логе');
+});
+
+test('rulate: глава без номера диапазоном не режется', async () => {
+  /* Пролог без «Глава N» в названии и без числа в теге получает номер null —
+     судить о его попадании в диапазон не по чему, и выкидывать его молча
+     нельзя: глава из работы выпала бы без единой строки в логе. */
+  const lines = ['# [Глава 2. Вторая попытка :|: 2]', 'н2', '', '# [Пролог. Начало :|: —]', 'н0'];
+  const { api, posts, plan } = await planFor(SITE_DUP, lines, (a) => { a.CFG.minChrf = 0; });
+  api.planSetRange(plan, '2');
+  const parsed = api.parseChaptersFile(lines.join('\n'));
+  assert.equal(parsed[1].num, null, 'у пролога номера нет — и в теге тоже');
+  const pr = await api.writePlan(plan, parsed,
+    { dryRun: false, skipSame: false, rangeStr: '2' },
+    { aborted: false, log: () => {}, setProgress() {} });
+  assert.deepEqual(posts, ['12', '30'], 'пролог остаётся в работе');
+  assert.equal(pr.skipRange, 0);
+});
+
+test('rulate: «1—2» любой тире — диапазон, а не «вся книга»', async () => {
+  /* Раньше принимались только «-» и «–»: человек писал «1—50», скрипт молча
+     заливал всю книгу. */
+  const { api } = boot([]);
+  for (const s of ['1-2', '1–2', '1—2', '1−2']) {
+    assert.deepEqual([...api.parseRange(s)].sort((a, b) => a - b), [1, 2], `не разобрано: ${s}`);
+  }
+  assert.equal(api.parseRange(''), null, 'пусто — вся книга');
+  assert.equal(api.parseRange('   '), null);
+  assert.deepEqual([...api.parseRange('3-1')].sort((a, b) => a - b), [1, 2, 3],
+    'обратный интервал — тот же диапазон');
+});
+
+test('rulate: неразобранный кусок диапазона не выбрасывается молча', async () => {
+  const { api } = boot([]);
+  const rep = api.parseRangeReport('1-2, abc; 7');
+  assert.deepEqual([...rep.set].sort((a, b) => a - b), [1, 2, 7], 'распознанное работает');
+  assert.deepEqual(rep.invalid, ['abc'], 'непонятное названо, а не проглочено');
+  assert.deepEqual(api.parseRangeReport('').invalid, []);
+});
+
+test('rulate: диапазон в плане и в заливке — одно правило', async () => {
+  /* План показывает «вне диапазона», заливка по тому же плану делает то же
+     самое: два места, одна функция inRange. */
+  const { api, posts, parsed, plan } = await planFor(SITE_DUP, FILE_DUP, (a) => { a.CFG.minChrf = 0; });
+  api.planSetRange(plan, '1-2');
+  const marked = plan.rows.filter((r) => api.planRowRange(r, plan.rangeSet) === '').map((r) => r.num);
+  assert.deepEqual(marked, [1, 2], 'в работе только 1 и 2');
+  const res = await api.writePlan(plan, parsed,
+    { dryRun: false, skipSame: false, rangeStr: '1-2' },
+    { aborted: false, log: () => {}, setProgress() {} });
+  assert.deepEqual(posts, ['12'], 'спорная 1 не залита, 2 — залита');
+  assert.equal(res.skipRange, 2, 'вне диапазона — 3 и пролог 0');
+});
+
+test('rulate: глава без номера не теряется без «Title fallback»', async () => {
+  /* Галка дублировала то же решение: без неё пролог выпадал из плана целиком
+     («номер не разобрался, название не совпало» просто не попадало в строки),
+     и человек не видел, что глава осталась за бортом. Теперь строка есть
+     всегда — со своим решением или с причиной «нет». */
+  const { parsed, plan } = await planFor(SITE_DUP,
+    ['# [Глава 1. История :|: 1]', 'н1', '', '# [Без название на сайте :|: 0]', 'н0']);
+  const odd = plan.rows.find((r) => r.title === 'Без название на сайте');
+  assert.ok(odd, 'строка с неразобранным номером есть в плане');
+  assert.equal(odd.site, null);
+  assert.equal(odd.how, 'нет');
+  assert.ok(parsed.length >= 2);
 });

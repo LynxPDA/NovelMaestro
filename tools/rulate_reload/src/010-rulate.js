@@ -11,7 +11,6 @@ const CFG = {
   multiFragment: 'skip',
   diffCtx: 40,
   titleMode: 'off',
-  fallbackByTitle: false,
   // проверка «та ли это глава»: chrF с уже сохранённым переводом.
   // Калибровка на реальных главах: та же глава — chrF 0.958–0.982,
   // разные главы одной книги — 0.480–0.524. Ноль выключает проверку:
@@ -190,27 +189,55 @@ function parseChaptersFile(text) {
 }
 
 /* ---------- парсинг диапазона ---------- */
-function parseRange(str) {
-  if (!str || !str.trim()) return null;
-  const parts = str.trim().split(/[,;]\s*/);
+/* Разделитель — любое тире: дефис, «–» (U+2013), «—» (U+2014) и «−» (U+2212):
+   человек ставит то, что удобно, а «1—50» вместо «1-50» иначе молча значит
+   «вся книга» — ограничение пропадает незаметно. Нераспознанные куски
+   возвращаются отдельно — о них надо сказать, а не выбросить. */
+const RANGE_DASH = '[\u002d\u2013\u2014\u2212]';
+
+function parseRangeReport(str) {
+  const raw = String(str == null ? '' : str).trim();
+  if (!raw) return { set: null, invalid: [], used: false };
   const set = new Set();
-  for (const p of parts) {
-    const m = p.match(/^(\d+)\s*[-\u2013]\s*(\d+)$/);
+  const invalid = [];
+  const rangeRe = new RegExp(`^(\\d+)\\s*${RANGE_DASH}\\s*(\\d+)$`);
+  for (const part of raw.split(/[,;]\s*/)) {
+    const t = part.trim();
+    if (!t) continue;
+    const m = t.match(rangeRe);
     if (m) {
       const a = parseInt(m[1], 10), b = parseInt(m[2], 10);
       for (let i = Math.min(a, b); i <= Math.max(a, b); i++) set.add(i);
-    } else if (/^\d+$/.test(p.trim())) {
-      set.add(parseInt(p.trim(), 10));
+    } else if (/^\d+$/.test(t)) {
+      set.add(parseInt(t, 10));
+    } else {
+      invalid.push(t);
     }
   }
-  return set.size > 0 ? set : null;
+  return { set: set.size > 0 ? set : null, invalid, used: true };
+}
+
+const parseRange = (str) => parseRangeReport(str).set;
+
+/* В диапазоне ли глава: пустое поле — да (вся книга), неразобранный номер
+   (пролог без «Глава N» в названии и без числа в теге) — тоже да, судить
+   не по чему. Правило ОДНО на таблицу плана и на заливку: иначе план
+   обещает одно, а скрипт делает другое. */
+const inRange = (num, set) => !set || num == null || set.has(num);
+
+/* Диапазон для лога: у широкого — границы и число, а не простыня номеров. */
+function describeRange(set) {
+  if (!set) return 'все главы';
+  const nums = [...set].sort((a, b) => a - b);
+  if (nums.length > 12) return `${nums[0]}..${nums[nums.length - 1]} (${nums.length} шт.)`;
+  return nums.join(', ');
 }
 
 /* ---------- карта сайта ---------- */
 /* Карта — «номер → СПИСОК глав сайта», а не одна глава: на сайте бывает
    несколько глав с одним номером («Глава 1» во втором томе, «Глава 1.
-   Дополнительная глава»). Раньше в карте оставалась первая, остальные
-   терялись молча — и текст дополнительной главы уезжал в «Историю».
+   Дополнительная глава»). Одна глава в карте — это молчаливая потеря
+   остальных: текст дополнительной главы уезжает в «Историю».
    Заодно собирается список всех глав в порядке оглавления: он нужен
    как последняя подсказка, когда название на сайте устарело (книгу
    перекомпилировали, названия на сайте — от прошлого перевода). */
@@ -403,8 +430,10 @@ function planMatches(parsed, site) {
       return;
     }
 
+    /* Не разобрался номер и не совпало название — строке нужен человек.
+       Отдельной галочки у поиска по названию нет: строка с причиной есть
+       в плане всегда — иначе глава пропадала бы из него молча. */
     if (ch.num == null) {
-      if (!CFG.fallbackByTitle) return;
       plan.set(i, { reason: 'номер не разобрался, название не совпало' });
       return;
     }
@@ -431,16 +460,14 @@ function planMatches(parsed, site) {
   return plan;
 }
 
-/* Порог сверки из поля панели: «0» — проверка выключена, пустое поле — порог
-   по умолчанию. Пустое не означает «выключено»: стёртое по случайности поле не
-   должно снимать последний заслон перед записью в чужую главу. */
-const CHRF_DEFAULT = CFG.minChrf;
-
+/* Порог сверки из поля панели: в поле стоит значение по умолчанию, поэтому
+   пустое (человек стёр) и «0» — одно и то же: сверка выключена. Мусор тоже
+   выключает: подставлять за человека потайной порог он не просил. */
 function parseChrfThreshold(raw) {
   const t = String(raw == null ? '' : raw).replace(',', '.').trim();
-  if (t === '') return CHRF_DEFAULT;
+  if (t === '') return 0;
   const v = Number(t);
-  if (!Number.isFinite(v)) return CHRF_DEFAULT;
+  if (!Number.isFinite(v)) return 0;
   if (v < 0) return 0;
   if (v > 1) return 1;
   return v;
@@ -463,7 +490,7 @@ const titleNorm = (s) => String(s || '').normalize('NFC').toLowerCase().replace(
 
 const siteUrl = (bookId, id) => '/book/' + bookId + '/' + id;
 
-function buildPlan(parsed, site, overrides) {
+function buildPlan(parsed, site, overrides, rangeSet) {
   const bookId = bookIdFromUrl();
   const base = planMatches(parsed, site);
   const rows = [];
@@ -485,23 +512,43 @@ function buildPlan(parsed, site, overrides) {
     rows.push(row);
   });
 
-  const plan = { rows, order, problems, site, manual: {}, bookId };
+  const plan = { rows, order, problems, site, manual: {}, bookId, rangeSet: rangeSet || null };
   if (overrides) applyOverrides(plan, parsed, overrides);
-  resolveConflicts(plan);
+  resolveConflicts(plan, plan.rangeSet);
   return plan;
 }
 
 /* Одна глава сайта — одна строка: второй претендент помечается `host`
    («кто занял»), но выбор человека не отменяется — пусть видит, что делает.
-   Последним заслоном остаётся chrF перед записью. */
-function resolveConflicts(plan) {
+   Последним заслоном остаётся chrF перед записью.
+
+   Занятой главу делает только строка В ДИАПАЗОНЕ: строка вне диапазона
+   в этом прогоне не пишется, и держать за собой главу она не может —
+   иначе её соседка выглядела бы спорной из-за строки, которой в работе нет. */
+function resolveConflicts(plan, rangeSet) {
   const owner = new Map();
   for (const r of plan.rows) {
-    if (!r.site) { r.host = ''; continue; }
+    if (!r.site || !inRange(r.num, rangeSet)) { r.host = ''; continue; }
     const id = String(r.site.chapterId);
     if (!owner.has(id)) { owner.set(id, r); r.host = ''; }
     else r.host = String(owner.get(id).fi);
   }
+}
+
+/* Диапазон меняет состав работы — обновить его можно и на готовом плане:
+   поле правят, глядя в таблицу, и перестраивать оглавление ради этого
+   незачем. Порядок строк (order) тот же, меняется только «что в работе». */
+function planSetRange(plan, rangeStr) {
+  plan.rangeSet = parseRange(rangeStr);
+  resolveConflicts(plan, plan.rangeSet);
+  return plan.rangeSet;
+}
+
+/* Работа этой строки в текущем диапазоне: пусто — «в работе», иначе причина
+   («вне диапазона»). Пустой диапазон = вся книга; глава без номера
+   (пролог, интерлюдия) диапазоном не режется — судить о ней не по чему. */
+function planRowRange(row, rangeSet) {
+  return inRange(row.num, rangeSet) ? '' : 'вне диапазона';
 }
 
 const planRow = (plan, fi) => plan.rows.find(r => r.fi === fi) || null;
@@ -516,7 +563,7 @@ function planAssign(plan, fi, siteId) {
     row.site = null;
     row.how = 'пропуск (ваше решение)';
     plan.manual[fi] = null;
-    resolveConflicts(plan);
+    resolveConflicts(plan, plan.rangeSet);
     return { ok: true };
   }
   const id = String(siteId);
@@ -525,7 +572,7 @@ function planAssign(plan, fi, siteId) {
   row.site = { url: hit.url || siteUrl(plan.bookId, id), chapterId: id, siteTitle: hit.siteTitle };
   row.how = 'вручную';
   plan.manual[fi] = id;
-  resolveConflicts(plan);
+  resolveConflicts(plan, plan.rangeSet);
   return { ok: true };
 }
 
@@ -562,7 +609,7 @@ function applyOverrides(plan, parsed, overrides) {
     plan.manual[row.fi] = String(id);
     applied.assigned++;
   }
-  resolveConflicts(plan);
+  resolveConflicts(plan, plan.rangeSet);
   return applied;
 }
 
@@ -610,7 +657,7 @@ function planResetSelected(plan, parsed, fis) {
       row.how = b && b.list ? 'спорная' : 'нет';
     }
   }
-  resolveConflicts(plan);
+  resolveConflicts(plan, plan.rangeSet);
   return fis.length;
 }
 
@@ -619,7 +666,7 @@ function planResetSelected(plan, parsed, fis) {
    якоря — строки, уже сопоставленные по названию, между ними позиции
    выравниваются по порядку оглавления. Ничего не пишется, пока человек не
    нажал «Старт», и каждая предложенная строка помечена `по порядку (черновик)`. */
-function planAlignByOrder(plan, parsed) {
+function planAlignByOrder(plan) {
   const anchors = plan.rows
     .map((row, idx) => ({ row, idx, at: (plan.site.ordered || []).findIndex(g => row.site && String(g.chapterId) === String(row.site.chapterId)) }))
     .filter(a => a.at >= 0);
@@ -639,7 +686,7 @@ function planAlignByOrder(plan, parsed) {
       suggested++;
     });
   }
-  resolveConflicts(plan);
+  resolveConflicts(plan, plan.rangeSet);
   return {
     suggested,
     note: suggested ? `выровнено ${suggested} строк между якорями — проверьте их глазами` : 'свободных промежутков одинаковой длины нет',
@@ -721,7 +768,7 @@ function planToText(plan, parsed) {
   const lines = ['# План заливки: глава файла → глава сайта', '#'];
   for (const row of plan.rows) {
     const label = (row.num != null ? row.num + '. ' : '-. ') + row.title;
-    const target = row.site ? `id=${row.site.chapterId} «${row.site.siteTitle}»` : '—';
+    const target = row.site ? `«${row.site.siteTitle}» (id=${row.site.chapterId})` : '—';
     lines.push(`${label}\t${target}\t${row.how}${row.host ? ` (глава сайта занята строкой ${row.host})` : ''}`);
   }
   for (const fi of plan.problems) lines.push(`${parsed[fi].title}\t—\t${parsed[fi].problem}`);
@@ -731,9 +778,16 @@ function planToText(plan, parsed) {
 /* ---------- заливка по плану ---------- */
 /* Заливка ровно по плану: решения не пересматриваются, иначе правка человека
    была бы игрушечной. `opts.onlyFi` — залить только эти строки (выделение),
-   `opts.skipSame` — пропускать совпадающее, `opts.rangeStr` — диапазон номеров. */
+   `opts.skipSame` — пропускать совпадающее, `opts.rangeStr` — диапазон номеров.
+
+   Диапазон режет работу, а не молча не находит главу: строка вне диапазона
+   не идёт ни на страницу сайта, ни в счёт «не найдено». Проверка стоит
+   ДО разбора спорной строки: иначе глава вне диапазона попадала бы
+   в «неоднозначно» (а спорной она не бывает — её всё равно не льют),
+   а глава без номера не проверялась бы вовсе. */
 async function writePlan(plan, parsed, opts, ui) {
-  const rangeSet = parseRange(opts.rangeStr);
+  const rangeSet = opts.rangeStr === undefined ? (plan.rangeSet || null) : parseRange(opts.rangeStr);
+  const rangeReport = opts.rangeStr === undefined ? null : parseRangeReport(opts.rangeStr);
   const only = opts.onlyFi ? new Set(opts.onlyFi) : null;
   const entries = plan.order.map(fi => planRow(plan, fi)).filter(Boolean)
     .filter(r => !only || only.has(r.fi));
@@ -743,6 +797,11 @@ async function writePlan(plan, parsed, opts, ui) {
   const notFoundTitles = [];
   const reports = [];
   const report = (row, status, chrf) => reports.push({ fi: row.fi, status, chrf: chrf == null ? null : chrf });
+
+  if (rangeReport && rangeReport.invalid.length) {
+    ui.log(`⚠ Диапазон: не разобрано «${rangeReport.invalid.join('», «')}» — работают только номера и интервалы.`, 'warn');
+  }
+  if (rangeSet) ui.log(`Диапазон в работе: ${describeRange(rangeSet)}`, 'plain');
 
   if (!only) {
     st.skipProblem = plan.problems.length;
@@ -756,7 +815,7 @@ async function writePlan(plan, parsed, opts, ui) {
     const ch = parsed[row.fi];
     const tick = `[${job + 1}/${total}]`;
 
-    if (rangeSet && ch.num != null && !rangeSet.has(ch.num)) { st.skipRange++; report(row, 'вне диапазона'); continue; }
+    if (!inRange(ch.num, rangeSet)) { st.skipRange++; ui.log(`${tick} «${ch.title}» — вне диапазона (№${ch.num})`, 'plain'); report(row, 'вне диапазона'); continue; }
 
     if (!row.site) {
       /* Снятая человеком строка — не «неоднозначно» и не «не найдена»:
@@ -925,7 +984,7 @@ async function run(parsed, opts, ui) {
     try { site = await buildSiteMap(bookId); }
     catch (e) { ui.log('Ошибка чтения оглавления: ' + e.message, 'err'); return { error: 'оглавление' }; }
     logSiteReport(site, ui);
-    plan = buildPlan(parsed, site);
+    plan = buildPlan(parsed, site, null, parseRange(opts.rangeStr));
   }
   const res = await writePlan(plan, parsed, opts, ui);
   res.plan = plan;
@@ -956,14 +1015,14 @@ function logSiteReport(site, ui) {
 }
 
 /* ---------- UI ---------- */
-GM_addStyle(`#ru-bulk, #ru-bulk * { box-sizing: border-box !important; } #ru-bulk { position: fixed; right: 12px; bottom: 12px; z-index: 999999; width: min(680px, calc(100vw - 24px)); text-align: left !important; background: #1f2430; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 10px; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; box-shadow: 0 8px 28px rgba(0,0,0,.45); margin: 0; padding: 0; } #ru-bulk .ru-hd { padding: 8px 10px; background: #2a3142; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: grab; user-select: none; margin: 0; } #ru-bulk .ru-hd:active { cursor: grabbing; } #ru-bulk .ru-hd b { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; } #ru-bulk .ru-bd { padding: 10px; margin: 0; } #ru-bulk .ru-hd-btns { display: flex; gap: 4px; align-items: center; } #ru-bulk button#ru-close:hover { background: #d9534f !important; } #ru-bulk button { background: #2f81c4; color: #fff; border: 0; border-radius: 5px; padding: 6px 11px; cursor: pointer; margin: 0; font: inherit; user-select: none; white-space: nowrap; } #ru-bulk button.ru-sec { background: #444c5c; } #ru-bulk button.ru-go { background: #2e9e5b; } #ru-bulk button:hover { filter: brightness(1.08); } #ru-bulk button:disabled { opacity: .45; cursor: not-allowed; filter: none; } #ru-bulk .ru-log-box { min-height: 120px; max-height: 40vh; overflow-x: hidden !important; overflow-y: auto !important; background: #11151c; border: 1px solid #333; border-radius: 6px; padding: 7px !important; margin: 8px 0 0 0 !important; font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace !important; white-space: pre-wrap !important; word-break: break-word !important; text-align: left !important; } #ru-bulk .ru-log-box span { margin: 0 !important; padding: 0 !important; display: inline; } #ru-bulk .ru-bar { height: 6px; background: #333; border-radius: 3px; margin: 8px 0 0 0; overflow: hidden; } #ru-bulk .ru-bar > i { display: block; height: 100%; width: 0; background: #37c46a; transition: width .2s; } #ru-bulk .ru-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0 0 !important; padding: 0 !important; width: 100% !important; } #ru-bulk .ru-row:first-child { margin-top: 0 !important; } #ru-bulk .ru-ok { color: #7fe39a !important; } #ru-bulk .ru-err { color: #ff8585 !important; } #ru-bulk .ru-warn { color: #ffd166 !important; } #ru-bulk .ru-plain { color: #9aa3b2 !important; } #ru-bulk label { display: inline-flex; gap: 5px; align-items: center; user-select: none; cursor: pointer; white-space: nowrap; margin: 0 !important; font-weight: normal !important; } #ru-bulk input[type=number], #ru-bulk input[type=text] { width: 70px; background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; outline: none; } #ru-bulk input[type=text].ru-wide { width: 130px; } #ru-bulk select { background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; } #ru-bulk input[type=checkbox] { margin: 0 !important; transform: scale(1.1); } #ru-bulk .ru-muted { color: #9aa3b2; } #ru-bulk .ru-sep { border-top: 1px solid #3a4150; margin: 8px 0 !important; padding: 0 !important; } #ru-bulk .ru-plan-box { margin: 8px 0 0 0 !important; } #ru-bulk .ru-plan-title { margin: 0 !important; } #ru-bulk .ru-plan-title b { font-weight: 600; } #ru-bulk .ru-plan-hd { gap: 8px; } #ru-bulk .ru-plan-hd label { white-space: nowrap; } #ru-bulk .ru-plan-list { max-height: 46vh; overflow: auto; background: #11151c; border: 1px solid #333; border-radius: 6px; margin: 6px 0 0 0 !important; font: 11.5px/1.35 ui-monospace, Menlo, Consolas, monospace !important; } #ru-bulk .ru-plan-row { display: flex; gap: 6px; align-items: center; padding: 3px 6px; border-bottom: 1px solid #232936; } #ru-bulk .ru-plan-row:last-child { border-bottom: 0; } #ru-bulk .ru-plan-row.ru-pr-issue { background: #2a2113; } #ru-bulk .ru-plan-row.ru-pr-none { background: #2a1717; } #ru-bulk .ru-plan-row.ru-pr-manual { background: #12242a; } #ru-bulk .ru-pr-num { flex: 0 0 42px; color: #9aa3b2; text-align: right; } #ru-bulk .ru-pr-title { flex: 1 1 46%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #6b7686; } #ru-bulk .ru-pr-sel { flex: 1 1 38%; min-width: 0; max-width: 100%; } #ru-bulk .ru-pr-chrf { flex: 0 0 46px; text-align: right; color: #9aa3b2; } #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; } #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; } #ru-bulk .ru-pr-status { flex: 0 0 auto; color: #7f8b9c; font-size: 10.5px; }`);
+GM_addStyle(`#ru-bulk, #ru-bulk * { box-sizing: border-box !important; } #ru-bulk { position: fixed; right: 12px; bottom: 12px; z-index: 999999; width: min(680px, calc(100vw - 24px)); max-height: calc(100vh - 24px); display: flex; flex-direction: column; overflow: hidden; text-align: left !important; background: #1f2430; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 10px; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; box-shadow: 0 8px 28px rgba(0,0,0,.45); margin: 0; padding: 0; } #ru-bulk .ru-hd { flex: 0 0 auto; padding: 8px 10px; background: #2a3142; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: grab; user-select: none; margin: 0; } #ru-bulk .ru-hd:active { cursor: grabbing; } #ru-bulk .ru-hd b { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; } #ru-bulk .ru-bd { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px; margin: 0; } #ru-bulk .ru-grip { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 0 45%, #55607a 45% 55%, transparent 55% 70%, #55607a 70% 80%, transparent 80%); border-bottom-right-radius: 10px; z-index: 2; } #ru-bulk .ru-hd-btns { display: flex; gap: 4px; align-items: center; } #ru-bulk button#ru-close:hover { background: #d9534f !important; } #ru-bulk button { background: #2f81c4; color: #fff; border: 0; border-radius: 5px; padding: 6px 11px; cursor: pointer; margin: 0; font: inherit; user-select: none; white-space: nowrap; } #ru-bulk button.ru-sec { background: #444c5c; } #ru-bulk button.ru-go { background: #2e9e5b; } #ru-bulk button:hover { filter: brightness(1.08); } #ru-bulk button:disabled { opacity: .45; cursor: not-allowed; filter: none; } #ru-bulk .ru-log-box { min-height: 120px; max-height: 40vh; overflow-x: hidden !important; overflow-y: auto !important; background: #11151c; border: 1px solid #333; border-radius: 6px; padding: 7px !important; margin: 8px 0 0 0 !important; font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace !important; white-space: pre-wrap !important; word-break: break-word !important; text-align: left !important; } #ru-bulk .ru-log-box span { margin: 0 !important; padding: 0 !important; display: inline; } #ru-bulk .ru-bar { height: 6px; background: #333; border-radius: 3px; margin: 8px 0 0 0; overflow: hidden; } #ru-bulk .ru-bar > i { display: block; height: 100%; width: 0; background: #37c46a; transition: width .2s; } #ru-bulk .ru-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0 0 !important; padding: 0 !important; width: 100% !important; } #ru-bulk .ru-row:first-child { margin-top: 0 !important; } #ru-bulk .ru-ok { color: #7fe39a !important; } #ru-bulk .ru-err { color: #ff8585 !important; } #ru-bulk .ru-warn { color: #ffd166 !important; } #ru-bulk .ru-plain { color: #9aa3b2 !important; } #ru-bulk label { display: inline-flex; gap: 5px; align-items: center; user-select: none; cursor: pointer; white-space: nowrap; margin: 0 !important; font-weight: normal !important; } #ru-bulk input[type=number], #ru-bulk input[type=text] { width: 70px; background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; outline: none; } #ru-bulk input[type=text].ru-wide { width: 130px; } #ru-bulk select { background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; } #ru-bulk input[type=checkbox] { margin: 0 !important; transform: scale(1.1); } #ru-bulk .ru-muted { color: #9aa3b2; } #ru-bulk .ru-sep { border-top: 1px solid #3a4150; margin: 8px 0 !important; padding: 0 !important; } #ru-bulk .ru-plan-box { margin: 8px 0 0 0 !important; } #ru-bulk .ru-plan-title { margin: 0 !important; } #ru-bulk .ru-plan-title b { font-weight: 600; } #ru-bulk .ru-plan-hd { gap: 8px; } #ru-bulk .ru-plan-hd label { white-space: nowrap; } #ru-bulk .ru-plan-list { max-height: 46vh; overflow: auto; background: #11151c; border: 1px solid #333; border-radius: 6px; margin: 6px 0 0 0 !important; font: 11.5px/1.35 ui-monospace, Menlo, Consolas, monospace !important; } #ru-bulk .ru-plan-row { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; padding: 3px 6px; border-bottom: 1px solid #232936; } #ru-bulk .ru-plan-row:last-child { border-bottom: 0; } #ru-bulk .ru-plan-row.ru-pr-out { opacity: .45; } #ru-bulk .ru-plan-row.ru-pr-issue { background: #2a2113; } #ru-bulk .ru-plan-row.ru-pr-none { background: #2a1717; } #ru-bulk .ru-plan-row.ru-pr-manual { background: #12242a; } #ru-bulk .ru-pr-num { flex: 0 0 42px; color: #9aa3b2; text-align: right; } #ru-bulk .ru-pr-title { flex: 1 1 46%; min-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #6b7686; } #ru-bulk .ru-pr-sel { flex: 1 1 38%; min-width: 120px; max-width: 100%; } #ru-bulk .ru-pr-chrf { flex: 0 0 46px; text-align: right; color: #9aa3b2; } #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; } #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; } #ru-bulk .ru-pr-status { flex: 0 0 auto; margin-left: auto; color: #7f8b9c; font-size: 10.5px; }`);
 
 const panel = document.createElement('div');
 panel.id = 'ru-bulk';
 /* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
    innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
    значения CFG здесь единственные данные, но правило одно на весь файл). */
-const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <label title="Показать только спорные и ненайденные строки"><input type="checkbox" id="ru-plan-issues"> только спорные</label> <label title="Оставить в списке только выбранные строки"><input type="checkbox" id="ru-plan-only"> только выделенные</label> <button class="ru-sec" id="ru-plan-skip" title="Отметить выделенные строки как «не лить»">Снять</button> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> <button class="ru-sec" id="ru-plan-align" title="Черновое выравнивание по порядку оглавления (когда нумерация разъехалась)">По порядку</button> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные главы и сверить текст (chrF)">Проверить</button> <button class="ru-sec" id="ru-plan-save" title="Сохранить план в JSON — его можно поправить и загрузить обратно">Экспорт</button> <button class="ru-sec" id="ru-plan-load" title="Загрузить план из JSON">Импорт</button> <input type="file" id="ru-plan-file" accept="application/json,.json" style="display:none"> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> <span class="ru-muted" style="margin-left:6px" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span> <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 — сверка выключена. Пустое поле — порог по умолчанию."> </div> <div class="ru-row"> <label title="Перечитать главу после записи"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> <label title="Если номер не найден — искать по названию"><input type="checkbox" id="ru-fallback-title"> Title fallback</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div>`;
+const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> <span class="ru-muted" id="ru-range-hint"></span> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <label title="Показать только спорные и ненайденные строки"><input type="checkbox" id="ru-plan-issues"> только спорные</label> <label title="Оставить в списке только выбранные строки"><input type="checkbox" id="ru-plan-only"> только выделенные</label> <button class="ru-sec" id="ru-plan-skip" title="Отметить выделенные строки как «не лить»">Снять</button> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> <button class="ru-sec" id="ru-plan-align" title="Черновое выравнивание по порядку оглавления (когда нумерация разъехалась)">По порядку</button> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные главы и сверить текст (chrF)">Проверить</button> <button class="ru-sec" id="ru-plan-save" title="Сохранить план в JSON — его можно поправить и загрузить обратно">Экспорт</button> <button class="ru-sec" id="ru-plan-load" title="Загрузить план из JSON">Импорт</button> <input type="file" id="ru-plan-file" accept="application/json,.json" style="display:none"> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> <span class="ru-muted" style="margin-left:6px" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span> <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 или пусто — сверка выключена."> </div> <div class="ru-row"> <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div> <div class="ru-grip" id="ru-grip" title="Потяните, чтобы изменить размер панели"></div>`;
 {
   const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
   for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
@@ -1044,7 +1103,8 @@ function candOptions(row) {
   return { list: out, all };
 }
 
-function planRowClass(row) {
+function planRowClass(row, rangeOut) {
+  if (rangeOut) return 'ru-pr-out';
   if (row.how === 'вручную') return 'ru-pr-manual';
   if (!row.site) return row.cands.length ? 'ru-pr-issue' : 'ru-pr-none';
   return row.host && String(row.host) !== String(row.fi) ? 'ru-pr-issue' : '';
@@ -1058,18 +1118,26 @@ function renderPlan() {
 
   const onlyIssues = $('ru-plan-issues').checked;
   const onlySel = $('ru-plan-only').checked;
+  const rangeSet = plan.rangeSet || null;
   /* «только спорные» — строки, которые ещё требуют решения. Только что
      назначенная руками строка остаётся видимой до переключения фильтра:
-     иначе выбор исчезает из-под курсора вместе с результатом. */
-  const needsDecision = (r) => !r.site || (r.host && String(r.host) !== String(r.fi));
+     иначе выбор исчезает из-под курсора вместе с результатом. Строка вне
+     диапазона в этом прогоне не пишется, поэтому в «спорные» не попадает:
+     беспокоиться о ней незачем. */
+  const needsDecision = (r) => planRowRange(r, rangeSet) === '' && (!r.site || (r.host && String(r.host) !== String(r.fi)));
   const rows = plan.rows.filter(r => (onlySel ? selected.has(r.fi) : true)
     && (onlyIssues ? needsDecision(r) || touched.has(r.fi) : true));
 
-  const ok = plan.rows.filter(r => r.site && !(r.host && String(r.host) !== String(r.fi))).length;
-  const ambiguous = plan.rows.filter(r => !r.site && r.cands.length).length;
-  const none = plan.rows.filter(r => !r.site && !r.cands.length).length;
-  const manual = plan.rows.filter(r => r.how === 'вручную').length;
-  $('ru-plan-stat').textContent = `План: сопоставлено ${ok}, спорных ${ambiguous}, не найдено ${none}` + (manual ? `, вручную ${manual}` : '') + `, проблемных ${plan.problems.length}`;
+  const inWork = plan.rows.filter(r => planRowRange(r, rangeSet) === '');
+  const out = plan.rows.length - inWork.length;
+  const ok = inWork.filter(r => r.site && !(r.host && String(r.host) !== String(r.fi))).length;
+  const ambiguous = inWork.filter(r => !r.site && r.cands.length).length;
+  const none = inWork.filter(r => !r.site && !r.cands.length).length;
+  const manual = inWork.filter(r => r.how === 'вручную').length;
+  $('ru-plan-stat').textContent = `План: сопоставлено ${ok}, спорных ${ambiguous}, не найдено ${none}`
+    + (manual ? `, вручную ${manual}` : '')
+    + `, проблемных ${plan.problems.length}`
+    + (rangeSet ? ` · в диапазоне ${inWork.length}, вне ${out}` : '');
 
   list.textContent = '';
   if (!rows.length) {
@@ -1088,7 +1156,7 @@ function renderPlan() {
 
     const num = document.createElement('span');
     num.className = 'ru-pr-num';
-    num.textContent = row.num != null ? row.num : '—';
+    num.textContent = row.num != null ? '№' + row.num : '—';
 
     const title = document.createElement('span');
     title.className = 'ru-pr-title';
@@ -1115,7 +1183,7 @@ function renderPlan() {
     for (const c of cands) {
       const o = document.createElement('option');
       o.value = c.id;
-      o.textContent = `id=${c.id} ${c.title}`;
+      o.textContent = `«${c.title}» · id=${c.id}`;
       if (row.site && c.id === String(row.site.chapterId)) o.selected = true;
       grp.appendChild(o);
     }
@@ -1127,7 +1195,7 @@ function renderPlan() {
       if (cands.some(c => c.id === g.id)) continue;
       const o = document.createElement('option');
       o.value = g.id;
-      o.textContent = `id=${g.id} ${g.title}`;
+      o.textContent = `«${g.title}» · id=${g.id}`;
       if (row.site && g.id === String(row.site.chapterId)) o.selected = true;
       grpAll.appendChild(o);
     }
@@ -1155,11 +1223,12 @@ function renderPlan() {
 
     const status = document.createElement('span');
     status.className = 'ru-pr-status';
-    status.textContent = rep ? rep.status : row.how;
+    const rangeOut = planRowRange(row, rangeSet);
+    status.textContent = (rep ? rep.status : row.how) + (rangeOut ? ' · ' + rangeOut : '');
 
     const tr = document.createElement('div');
-    tr.className = 'ru-plan-row ' + planRowClass(row);
-    tr.append(sel, num, title, arrow, cell, chrf, status);
+    tr.className = 'ru-plan-row ' + planRowClass(row, rangeOut !== '');
+    tr.append(sel, title, num, arrow, cell, chrf, status);
     list.appendChild(tr);
   }
 
@@ -1181,7 +1250,7 @@ async function refreshPlan() {
     logSiteReport(site, ui);
     const saved = loadPlanLocal();
     const overrides = saved && saved.manual ? saved.manual : null;
-    plan = buildPlan(parsed, site, overrides);
+    plan = buildPlan(parsed, site, overrides, parseRange($('ru-range').value));
     selected = new Set();
     touched = new Set();
     reports = new Map();
@@ -1189,6 +1258,9 @@ async function refreshPlan() {
       const applied = plan.rows.filter(r => r.how === 'вручную' || r.how.startsWith('пропуск (ваше')).length;
       log(`Восстановлено ваших решений из прошлого раза: ${applied} из ${Object.keys(overrides).length}`, 'plain');
     }
+    const rr = parseRangeReport($('ru-range').value);
+    if (rr.invalid.length) log(`⚠ Диапазон: не разобрано «${rr.invalid.join('», «')}»`, 'warn');
+    if (rr.set) log(`Диапазон в работе: ${describeRange(rr.set)}`, 'plain');
     log(`План: строк ${plan.rows.length}, спорных ${plan.rows.filter(r => !r.site && r.cands.length).length}, не найдено ${plan.rows.filter(r => !r.site && !r.cands.length).length}. Смотрите строки с цветом.`, 'ok');
     savePlanLocal();
     renderPlan();
@@ -1206,8 +1278,10 @@ async function refreshPlan() {
    только по кнопке и с прогрессом. */
 async function checkRows() {
   if (!plan) { log('Сначала постройте план.', 'warn'); return; }
-  let targets = plan.rows.filter(r => selected.has(r.fi));
-  if (!targets.length) targets = plan.rows.filter(r => !r.site || (r.host && String(r.host) !== String(r.fi)));
+  const rangeSet = plan.rangeSet || null;
+  const inWork = (r) => planRowRange(r, rangeSet) === '';
+  let targets = plan.rows.filter(r => selected.has(r.fi) && inWork(r));
+  if (!targets.length) targets = plan.rows.filter(r => !r.site || (r.host && String(r.host) !== String(r.fi))).filter(inWork);
   if (!targets.length) { log('Нечего проверять: спорных строк нет. Выделите строки в панели.', 'warn'); return; }
   log(`=== ПРОВЕРКА ${targets.length} строк (chrF) ===`, 'ok');
   aborted = false;
@@ -1271,7 +1345,7 @@ $('ru-plan-reset').onclick = () => {
 };
 $('ru-plan-align').onclick = () => {
   if (!plan) { log('Сначала постройте план.', 'warn'); return; }
-  const res = planAlignByOrder(plan, parsed);
+  const res = planAlignByOrder(plan);
   log('По порядку: ' + res.note, res.suggested ? 'warn' : 'plain');
   savePlanLocal();
   renderPlan();
@@ -1313,36 +1387,119 @@ $('ru-plan-file').addEventListener('change', (e) => {
   rd.readAsText(f, 'utf-8');
 });
 
-(function makeDraggable() {
+/* ---------- панель: перетаскивание, размер и память панели ---------- */
+/* Размер и положение — предпочтения УСТРОЙСТВА, а не книги: панель
+   раскрывают под свой экран, и на узком ноутбуке она не должна открываться
+   в размере монитора. Ключ один на устройство, не по книгам. */
+const UI_KEY = 'rlUi';
+
+function readUi() {
+  try { const raw = localStorage.getItem(UI_KEY); return raw ? JSON.parse(raw) : {}; } catch (e) { return {}; }
+}
+
+/* Размер возвращается в границы экрана: окно вчера могло быть шире.
+   Минимум — чтобы в панели жили кнопки и таблица, максимум — вьюпорт. */
+const UI_MIN_W = 420, UI_MIN_H = 240;
+
+function clampPanel(box) {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  /* На узком экране минимум не может быть больше экрана: иначе панель шире
+     окна, и до её правого края (с кнопками) не добраться ничем. */
+  const minW = Math.min(UI_MIN_W, vw - 8);
+  const minH = Math.min(UI_MIN_H, vh - 8);
+  const w = Math.max(minW, Math.min(vw - 8, box.w || 0));
+  const h = Math.max(minH, Math.min(vh - 8, box.h || 0));
+  return { w: Math.round(w), h: Math.round(h) };
+}
+
+function applyUi() {
+  const saved = readUi();
+  const size = clampPanel(saved.size || { w: panel.offsetWidth, h: panel.offsetHeight });
+  panel.style.width = size.w + 'px';
+  /* Свёрнутая панель — одна шапка: высоту ей задаёт содержимое, иначе под
+     шапкой осталось бы пустое поле — ровно то, что сворачивали. */
+  panel.style.height = panel.classList.contains('ru-min') ? '' : size.h + 'px';
+  /* Положение хранится только если панель утащили от угла: по умолчанию
+     она прижата вправо-вниз и сама переживает смену размера окна. */
+  if (!saved.pos) return;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const x = Math.max(0, Math.min(vw - size.w, saved.pos.x));
+  const y = Math.max(0, Math.min(vh - size.h, saved.pos.y));
+  panel.style.left = x + 'px';
+  panel.style.top = y + 'px';
+  panel.style.right = 'auto'; panel.style.bottom = 'auto';
+}
+
+function saveUi(patch) {
+  try { localStorage.setItem(UI_KEY, JSON.stringify(Object.assign(readUi(), patch))); } catch (e) { /* хранилище переполнено — не повод падать */ }
+}
+
+applyUi();
+
+/* Окно уменьшили — панель поджимается за ним, а не остаётся вчерашних
+   размеров за краем: обработчик только читает, запись делает человек. */
+window.addEventListener('resize', () => {
+  if (!readUi().size && !readUi().pos) return;
+  applyUi();
+});
+
+/* Перетаскивание за заголовок и изменение размера за угол — одним
+   указателем: pointermove работает и мышью, и на тач-экране, а
+   setPointerCapture не даёт событию потеряться за пределами панели. */
+(function makeMovable() {
   const handle = panel.querySelector('.ru-hd');
-  let drag = false, sx = 0, sy = 0, ox = 0, oy = 0;
-  handle.addEventListener('pointerdown', (e) => {
+  const grip = panel.querySelector('#ru-grip');
+  let mode = '', sx = 0, sy = 0, ow = 0, oh = 0, ol = 0, ot = 0;
+
+  const start = (e, m) => {
     if (e.target.tagName === 'BUTTON') return;
-    drag = true; sx = e.clientX; sy = e.clientY;
+    mode = m;
+    sx = e.clientX; sy = e.clientY;
     const r = panel.getBoundingClientRect();
-    ox = r.left; oy = r.top;
+    ow = r.width; oh = r.height; ol = r.left; ot = r.top;
     panel.style.right = 'auto'; panel.style.bottom = 'auto';
-    panel.style.left = ox + 'px'; panel.style.top = oy + 'px';
-    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    panel.style.left = ol + 'px'; panel.style.top = ot + 'px';
+    try { panel.setPointerCapture(e.pointerId); } catch (_) { /* вне окна событие всё равно приходит на панель */ }
     e.preventDefault();
-  });
-  handle.addEventListener('pointermove', (e) => {
-    if (!drag) return;
-    let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
-    nx = Math.max(0, Math.min(window.innerWidth - 60, nx));
-    ny = Math.max(0, Math.min(window.innerHeight - 40, ny));
-    panel.style.left = nx + 'px'; panel.style.top = ny + 'px';
-  });
-  const stop = () => { drag = false; };
-  handle.addEventListener('pointerup', stop);
-  handle.addEventListener('pointercancel', stop);
+  };
+
+  const move = (e) => {
+    if (!mode) return;
+    if (mode === 'drag') {
+      const nx = Math.max(0, Math.min(window.innerWidth - 80, ol + (e.clientX - sx)));
+      const ny = Math.max(0, Math.min(window.innerHeight - 40, ot + (e.clientY - sy)));
+      panel.style.left = nx + 'px'; panel.style.top = ny + 'px';
+      return;
+    }
+    const size = clampPanel({ w: ow + (e.clientX - sx), h: oh + (e.clientY - sy) });
+    panel.style.width = size.w + 'px';
+    panel.style.height = size.h + 'px';
+  };
+
+  const stop = () => {
+    if (!mode) return;
+    const resized = mode === 'resize';
+    mode = '';
+    const r = panel.getBoundingClientRect();
+    const patch = { pos: { x: Math.round(r.left), y: Math.round(r.top) } };
+    if (resized) patch.size = { w: Math.round(r.width), h: Math.round(r.height) };
+    saveUi(patch);
+  };
+
+  handle.addEventListener('pointerdown', (e) => start(e, 'drag'));
+  grip.addEventListener('pointerdown', (e) => start(e, 'resize'));
+  panel.addEventListener('pointermove', move);
+  panel.addEventListener('pointerup', stop);
+  panel.addEventListener('pointercancel', stop);
 })();
 
 $('ru-min').onclick = () => {
   const b = panel.querySelector('.ru-bd');
   const hidden = b.style.display === 'none';
   b.style.display = hidden ? '' : 'none';
+  panel.classList.toggle('ru-min', !hidden);
   $('ru-min').textContent = hidden ? '—' : '▢';
+  applyUi();
 };
 $('ru-close').onclick = () => { aborted = true; panel.remove(); };
 $('ru-pick').onclick = () => $('ru-file').click();
@@ -1360,9 +1517,9 @@ $('ru-file').addEventListener('change', (e) => {
   rd.onload = () => {
     parsed = parseChaptersFile(rd.result);
 
-    /* Дубли названий в файле больше не выбрасываются: главы разводятся
+    /* Дубли названий в файле не выбрасываются: главы разводятся
        номером из тега, а если номер один — порядком внутри группы.
-       Раньше обе «Главы 1» исчезали из заливки целиком. */
+       Иначе обе «Главы 1» исчезают из заливки целиком. */
     const sameName = new Map();
     for (const c of parsed) {
       const key = titleKey(c.title);
@@ -1402,16 +1559,31 @@ $('ru-file').addEventListener('change', (e) => {
 
 $('ru-stop').onclick = () => { aborted = true; log('Запрошена остановка…', 'warn'); };
 
+/* Диапазон правится ДО запуска, и план должен отвечать на тот вопрос,
+   который человек задал: поменял диапазон — перестроиться сразу, а не
+   узнать о расхождении при заливке. Перестраивать план целиком незачем:
+   меняется только состав работы (rangeSet), решения остаются те же. */
+$('ru-range').addEventListener('input', () => {
+  const rr = parseRangeReport($('ru-range').value);
+  const hint = $('ru-range-hint');
+  if (rr.invalid.length) { hint.textContent = 'не разобрано: ' + rr.invalid.join(', '); hint.className = 'ru-warn'; }
+  else if (rr.set) { hint.textContent = 'в работе: ' + describeRange(rr.set); hint.className = 'ru-muted'; }
+  else { hint.textContent = ''; }
+  if (!plan) return;
+  planSetRange(plan, $('ru-range').value);
+  renderPlan();
+});
+
 async function launch(dryRun) {
   aborted = false;
   CFG.verify = $('ru-verify').checked;
   CFG.skipSame = $('ru-skip-same').checked;
-  CFG.fallbackByTitle = $('ru-fallback-title').checked;
   CFG.minChrf = parseChrfThreshold($('ru-chrf').value);
   CFG.delayMs = parseInt($('ru-delay').value, 10) || 2500;
   CFG.jitterMs = parseInt($('ru-jitter').value, 10) || 0;
   CFG.titleMode = $('ru-title-mode').value;
   const rangeStr = $('ru-range').value.trim();
+  if (plan) planSetRange(plan, rangeStr);
 
   const onlySel = $('ru-plan-only').checked && selected.size > 0;
   const onlyFi = onlySel ? [...selected] : null;
