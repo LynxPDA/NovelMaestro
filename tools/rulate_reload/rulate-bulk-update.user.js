@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rulate: массовое обновление глав из .txt
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      2.12.0
+// @version      2.13.0
 // @description  Льёт перевод глав на tl.rulate.ru из .txt. Кнопка под «Оглавление:», панель в тему сайта. План сопоставления с правкой строится сам. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Поиск по названию. Сверка главы (chrF). Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным. Главы, разбитые на несколько фрагментов, пропускаются.
 // @author       NovelMaestro
 // @license      MIT
@@ -25,9 +25,9 @@
 (function () {
 'use strict';
 
-/* Версия панели — из meta.js (сборщик подставляет 2.12.0): вторая
+/* Версия панели — из meta.js (сборщик подставляет 2.13.0): вторая
    копия номера в разметке разъезжается с релизом. */
-const APP_VERSION = '2.12.0';
+const APP_VERSION = '2.13.0';
 
 const CFG = {
   delayMs: 2100,
@@ -272,21 +272,36 @@ function describeRange(set) {
    перекомпилировали, названия на сайте — от прошлого перевода). */
 async function buildSiteMap(bookId) {
   const bookUrl = '/book/' + bookId;
-  const first = (location.pathname === bookUrl || location.pathname === bookUrl + '/')
-    ? document
-    : (await getDoc(bookUrl)).doc;
-  /* Оглавление постраничное (на сайте по 100 глав на страницу): без
-     обхода пейджера главы 101+ не видны, и файл на них говорит
-     «НЕ НАЙДЕНА». Номера страниц берём из ссылок пейджера, а не
-     из размера DOM: сколько глав показать, решает сервер и настройка
-     «Выводить главы по». */
-  const pageNums = new Set();
-  first.querySelectorAll('a[href*="Chapter_page="]').forEach(a => {
-    const m = (a.getAttribute('href') || '').match(/Chapter_page=(\d+)/);
-    if (m) pageNums.add(parseInt(m[1], 10));
-  });
+  /* Открытая страница оглавления — это документ, только если мы правда на
+     ней: `?Chapter_page=3` при том же пути, что и книга, иначе документ
+     считался бы первой страницей и главы 101+ терялись. */
+  const curPage = (() => {
+    const v = parseInt(new URLSearchParams(location.search).get('Chapter_page') || '1', 10);
+    return Number.isFinite(v) && v > 0 ? v : 1;
+  })();
+  const onBook = (location.pathname === bookUrl || location.pathname === bookUrl + '/');
+  const first = onBook ? document : (await getDoc(bookUrl)).doc;
+
+  /* Оглавление постраничное: сколько глав на страницу, решает сервер и
+     настройка «Выводить главы по». Без обхода пейджера главы со второй
+     страницы не видны, и файл говорит на них «НЕ НАЙДЕНА».
+
+     Номера страниц берутся не из ссылок пейджера, а рядом: у Rulate пейджер
+     показывает только крайние и соседние страницы (1, 2, 3, 4, 6 при шести),
+     поэтому обход строго по ссылкам терял середину — целые сотни глав.
+     Всего страниц — самое большое число в ссылках, а забираются все подряд. */
+  const lastNum = (() => {
+    let max = curPage;
+    first.querySelectorAll('a[href*="Chapter_page="]').forEach(a => {
+      const m = (a.getAttribute('href') || '').match(/Chapter_page=(\d+)/);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    return max;
+  })();
+
   const extra = [];
-  for (const p of [...pageNums].sort((a, b) => a - b)) {
+  for (let p = 1; p <= lastNum; p++) {
+    if (p === curPage) continue;
     try { extra.push((await getDoc(bookUrl + '?Chapter_page=' + p)).doc); }
     catch (e) { /* страница не отдалась — работаем с тем, что есть */ }
   }
@@ -715,31 +730,6 @@ function planAssign(plan, fi, siteId) {
 /* Оверрайды: что человек решил, помнится между запусками и переживает
    перекомпиляцию файла. Ключ — номер + название главы файла: индекс строки
    после нового разбора уже другой (главы добавились или ушли). */
-/* «Сбросить»: вернуть строку к тому, что решил бы скрипт сам. Решение берём
-   у planMatches — второго алгоритма сопоставления быть не должно, иначе
-   «сбросить» и «План» начнут расходиться. */
-function planResetSelected(plan, parsed, fis) {
-  const base = planMatches(parsed, plan.site);
-  for (const fi of fis) {
-    const row = planRow(plan, fi);
-    if (!row) continue;
-    const b = base.get(row.fi);
-    if (b && b.info) {
-      row.site = b.info;
-      /* Кандидаты не обнуляются: в <select> должны остаться все главы с этим
-         номером, иначе сразу после «Сбросить» выбор снова схлопывается в одну
-         строку. */
-      row.cands = (b && b.list) || row.cands;
-      row.how = b.how || 'по номеру';
-    } else {
-      row.site = null;
-      row.cands = (b && b.list) || [];
-      row.how = b && b.list ? 'спорная' : 'нет';
-    }
-  }
-  resolveConflicts(plan, plan.rangeSet);
-  return fis.length;
-}
 
 /* ---------- план в файл и обратно ---------- */
 function planToData(plan, parsed) {
@@ -1027,8 +1017,6 @@ function candOptions(row) {
    дублируются. Соседи по оглавлению поднимаются наверх: когда нумерация
    разъехалась, верная глава обычно рядом. */
 function fillSelect(select, row) {
-  if (select.dataset.filled) return;
-  select.dataset.filled = '1';
   const all = allSiteOptions();
   const have = new Set([...select.querySelectorAll('option')].map(o => o.value));
   /* Счёт считается для КАЖДОЙ главы книги, а не только для тех, что пришли
@@ -1213,6 +1201,17 @@ html.dark-theme #ru-bulk .ru-plan-row, body.dark-theme #ru-bulk .ru-plan-row { b
 html.dark-theme #ru-bulk .ru-plan-row.ru-pr-issue, body.dark-theme #ru-bulk .ru-plan-row.ru-pr-issue { background: #2a2113; }
 html.dark-theme #ru-bulk .ru-plan-row.ru-pr-none, body.dark-theme #ru-bulk .ru-plan-row.ru-pr-none { background: #2a1717; }
 html.dark-theme #ru-bulk .ru-plan-row.ru-pr-manual, body.dark-theme #ru-bulk .ru-plan-row.ru-pr-manual { background: #12242a; }
+/* Шапка таблицы плана: две колонки названий подписаны, поэтому она стоит на
+   сетке строки, а не отдельной вёрсткой. */
+#ru-bulk .ru-plan-head {
+  position: sticky; top: 0; z-index: 1;
+  background: #f0f0f0; font-weight: 600; color: #555; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .03em;
+}
+html.dark-theme #ru-bulk .ru-plan-head, body.dark-theme #ru-bulk .ru-plan-head {
+  background: var(--dark-bg-secondary, #2d2d2d); color: var(--dark-text-secondary, #b0b0b0);
+}
+#ru-bulk .ru-plan-head .ru-pr-tgt { display: block; }
 #ru-bulk .ru-pr-num { flex: 0 0 42px; color: #777; text-align: right; }
 #ru-bulk .ru-pr-title { flex: 1 1 44%; min-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #999; }
@@ -1224,6 +1223,17 @@ html.dark-theme #ru-bulk .ru-plan-row.ru-pr-manual, body.dark-theme #ru-bulk .ru
 html.dark-theme #ru-bulk .ru-pr-chrf.ru-bad, body.dark-theme #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; }
 html.dark-theme #ru-bulk .ru-pr-chrf.ru-good, body.dark-theme #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; }
 #ru-bulk .ru-pr-status { flex: 0 0 auto; color: #888; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Кнопка сверки на строке: только иконка, поэтому квадратная и без рамки. */
+#ru-bulk .ru-pr-probe {
+  flex: 0 0 auto; padding: 3px 5px !important; line-height: 1 !important;
+  color: #666; background: transparent !important; border-color: transparent !important;
+}
+#ru-bulk .ru-pr-probe:hover:not(:disabled) { background: #e2e2e2 !important; border-color: #ccc !important; }
+#ru-bulk .ru-pr-probe svg { display: block; }
+html.dark-theme #ru-bulk .ru-pr-probe, body.dark-theme #ru-bulk .ru-pr-probe { color: var(--dark-text-secondary, #b0b0b0); }
+html.dark-theme #ru-bulk .ru-pr-probe:hover:not(:disabled), body.dark-theme #ru-bulk .ru-pr-probe:hover:not(:disabled) {
+  background: var(--dark-bg-hover, #404040) !important; border-color: var(--dark-border-secondary, #555) !important;
+}
 
 /* Мобильный: строки плана в две колонки, поля на всю ширину, кнопки крупнее
    (палец точнее мыши не попадает). Название и номер в одну строку. */
@@ -1233,11 +1243,12 @@ html.dark-theme #ru-bulk .ru-pr-chrf.ru-good, body.dark-theme #ru-bulk .ru-pr-ch
   #ru-bulk .ru-bd { padding: 10px; }
   #ru-bulk .ru-plan-list { max-height: 50vh; }
   #ru-bulk .ru-plan-row { gap: 4px; }
-  /* Галочка, название и номер в одну строку: чекбокс сам по себе занимал
-     строку и выглядел отдельным списком. */
+  /* Название и номер в одну строку, список глав под ними, кнопка сверки —
+     справа от названия. */
   #ru-bulk .ru-pr-title { flex: 1 1 auto; order: 1; }
   #ru-bulk .ru-pr-num { order: 2; flex: 0 0 auto; }
-  #ru-bulk .ru-plan-row > input[type=checkbox] { order: 0; }
+  #ru-bulk .ru-pr-probe { order: 3; }
+  #ru-bulk .ru-plan-head .ru-pr-tgt { display: none; }
   #ru-bulk .ru-pr-arrow { display: none; }
   #ru-bulk .ru-pr-tgt { order: 3; flex: 1 1 100%; }
   #ru-bulk .ru-pr-chrf { order: 4; flex: 0 0 auto; }
@@ -1303,6 +1314,14 @@ panel.id = 'ru-bulk';
 /* Таблица глав лежит внутри <form action="…/subscribe">, поэтому кнопка без
    type по умолчанию отправляет форму: страница уезжает на /subscribe, а
    панель исчезает вместе с ней. Проставляем type всем кнопкам сразу. */
+/* Строка разметки → узел SVG. innerHTML здесь не годится не из-за данных
+   (их нет — разметка статическая), а из-за правила файла: разметка только
+   разбирается DOMParser'ом. */
+function svgNode(markup) {
+  const d = new DOMParser().parseFromString('<body>' + markup + '</body>', 'text/html');
+  return document.adoptNode(d.body.firstChild);
+}
+
 function disableFormSubmit(root) {
   for (const b of root.querySelectorAll('button:not([type])')) b.type = 'button';
 }
@@ -1318,7 +1337,7 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
 <div class="ru-bd">
   <div class="ru-row">
     <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none">
-    <button id="ru-pick">Выбрать .txt</button>
+    <button id="ru-pick">Выбрать файл с главами</button>
     <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Главы, разбитые на сайте на несколько фрагментов, пропускаются: один текст файла не делится на них один-к-одному">Старт</button>
     <button id="ru-stop" disabled>Стоп</button>
   </div>
@@ -1330,12 +1349,18 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
   </div>
   <div class="ru-sep"></div>
   <div class="ru-plan-box" id="ru-plan-box">
-    <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет — выберите .txt</b></div>
+    <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет — выберите файл с главами</b></div>
     <div class="ru-row ru-plan-hd">
       <span class="ru-muted">Показывать:</span>
       <select id="ru-plan-filter" title="Какие строки видны в таблице"><option value="all">Все</option><option value="issues">Только спорные</option></select>
-      <button id="ru-plan-check" title="Прочитать выделенные строки и сверить текст по chrF">Проверить выбранные (chrF)</button>
-      <button id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button>
+    </div>
+    <!-- Шапка таблицы: две колонки названий подписаны, иначе непонятно,
+         какое из двух названий чьё. -->
+    <div class="ru-plan-row ru-plan-head" aria-hidden="true">
+      <span class="ru-pr-title">В файле</span>
+      <span class="ru-pr-arrow"></span>
+      <span class="ru-pr-tgt">На сайте</span>
+      <span class="ru-pr-chrf"></span>
     </div>
     <div class="ru-plan-list" id="ru-plan-list"></div>
   </div>
@@ -1447,7 +1472,6 @@ let parsed = [];
 let aborted = false;
 let plan = null;            // готовый план: его же заливают кнопки
 let site = null;            // оглавление книги на момент построения плана
-let selected = new Set();   // fi выделенных строк
 let touched = new Set();    // fi строк, назначенных вручную в этом проходе
 let reports = new Map();    // fi → {status, chrf} из последнего прогона
 const ui = {
@@ -1488,17 +1512,19 @@ dropLegacyPlanStore();
 const allSiteOptions = () => (site ? site.ordered : []).map(g => ({ id: String(g.chapterId), title: g.siteTitle, url: g.url }));
 
 /* Первые варианты строки: выбранная глава и кандидаты по номеру, ближайшие
-   по названию сверху.
+   по названию сверху; следом — вся книга (fillSelect).
 
-   Полный список книги здесь сознательно НЕ строится: `<option>` на каждую
-   главу в каждой строке — это (строки × главы) элементов, у книги на 600
-   глав их выходило 360 тысяч, и один клик по чекбоксу занимал семь секунд.
-   Весь список появляется при открытии конкретного `<select>` (fillSelect). */
+   Полный список строится только для показанных строк (порциями по 60), а
+   номера ищутся в нём средствами браузера, без обхода элементов: `<option>`
+   на каждую главу — это (строки × главы) элементов, и на 600 главах разом
+   такое построение занимало секунды. */
 function optionFor(c) {
   const o = document.createElement('option');
   o.value = c.id;
   const sc = c.score != null && c.score >= TITLE_SIMILAR_MIN ? ` · ${c.score.toFixed(2)}` : '';
-  o.textContent = `«${c.title}» · id=${c.id}${sc}`;
+  /* Без кавычек: колонка уже подписана «На сайте», и кавычки в каждой
+     строке только мешают читать длинные названия. */
+  o.textContent = `${c.title} · id=${c.id}${sc}`;
   if (c.score != null) o.style.color = c.score >= 0.85 ? '#7fe39a' : c.score >= 0.65 ? '#ffd166' : '';
   return o;
 }
@@ -1549,7 +1575,7 @@ function updateFoot(shownCount) {
   const more = planState.total != null ? Math.max(0, planState.total - shown) : 0;
   foot.textContent = `показано ${shown} из ${planState.total != null ? planState.total : shown} строк`
     + (more ? ` · ещё ${more} — потяните прокрутку` : '')
-    + ` · выделено ${selected.size}`;
+    ;
   foot.title = more ? 'Показать все строки сразу' : '';
   foot.onclick = more ? () => { planState.limit = 0; renderPlan(); } : null;
 }
@@ -1602,18 +1628,6 @@ function renderPlan() {
   }
 
   for (const row of rows) {
-    const sel = document.createElement('input');
-    sel.type = 'checkbox';
-    sel.checked = selected.has(row.fi);
-    sel.title = 'Выделить строку (для «Проверить» и счётчика)';
-    /* Клик по чекбоксу не перерисовывает таблицу: перерисовка снесла бы
-       DOM под курсором и на семистах строках стоила бы секунды. Меняются
-       только счётчик и собственная строка. */
-    sel.onchange = () => {
-      if (sel.checked) selected.add(row.fi); else selected.delete(row.fi);
-      updateFoot();
-    };
-
     const num = document.createElement('span');
     num.className = 'ru-pr-num';
     num.textContent = row.num != null ? '№' + row.num : '—';
@@ -1645,11 +1659,12 @@ function renderPlan() {
       grp.appendChild(o);
     }
     if (cands.length) select.appendChild(grp);
-    /* Ленивое дополнение: до первого раскрытия в списке только кандидаты.
-       Раскрыли — появился весь оглавление книги (fillSelect). */
-    let filled = false;
-    select.addEventListener('pointerdown', () => { fillSelect(select, row); filled = true; });
-    select.addEventListener('keydown', (e) => { if (!filled && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) { fillSelect(select, row); filled = true; } });
+
+    /* Вся книга — сразу и целиком. Ленивое дополнение по раскрытию экономило
+       построение, но заставляло раскрывать каждый список по очереди, чтобы
+       пройти по главам; полноценный список у строки нужен с первого взгляда. */
+    fillSelect(select, row);
+
     select.onchange = () => {
       /* «Не выбрана» — тот же результат, что раньше давала кнопка «Снять»:
          строка не льётся. */
@@ -1669,9 +1684,30 @@ function renderPlan() {
     const chrf = document.createElement('span');
     chrf.className = 'ru-pr-chrf';
 
+    /* Проверка одной главы — кнопкой на строке: сверка идёт там, где виден
+       результат этой строки, и не требует выделять ничего заранее. Весы
+       выбраны как знак сверки двух текстов; подпись в подсказке, потому что
+       иконка одна и без текста. */
+    const probe = document.createElement('button');
+    probe.type = 'button';
+    probe.className = 'ru-pr-probe';
+    probe.title = 'Сверить эту главу с переводом на сайте (chrF)';
+    probe.setAttribute('aria-label', 'Сверить эту главу с переводом на сайте (chrF)');
+    /* Весы: стойка, перекладина и две чаши — знак сверки двух текстов.
+       Разбирается DOMParser, а не innerHTML: подстановка разметки в
+       innerHTML — это путь для HTML, а нужен ровно разобранный узел (то же
+       правило, что у разметки панели). */
+    probe.appendChild(svgNode('<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">'
+      + '<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">'
+      + '<path d="M8 3.6v10"/><path d="M4.3 13.6h7.4"/><path d="M1.8 3.6h12.4"/>'
+      + '<path d="M3.1 3.6v2.5"/><path d="M12.9 3.6v2.5"/></g>'
+      + '<path fill="currentColor" d="M.9 6.1h4.4a2.2 2.2 0 0 1-4.4 0Z"/>'
+      + '<path fill="currentColor" d="M10.7 6.1h4.4a2.2 2.2 0 0 1-4.4 0Z"/></svg>'));
+    probe.onclick = () => checkRow(row);
+
     const tr = document.createElement('div');
     tr.className = 'ru-plan-row ' + planRowClass(row, planRowRange(row, rangeSet) !== '');
-    tr.append(sel, title, num, arrow, cell, chrf);
+    tr.append(num, title, arrow, cell, chrf, probe);
     paintRow(row, tr, chrf, status, rangeSet);
     list.appendChild(tr);
   }
@@ -1705,7 +1741,6 @@ async function refreshPlan() {
     site = await buildSiteMap(bookId);
     logSiteReport(site, ui);
     plan = buildPlan(parsed, site, parseRange($('ru-range').value));
-    selected = new Set();
     touched = new Set();
     reports = new Map();
     const rr = parseRangeReport($('ru-range').value);
@@ -1721,65 +1756,63 @@ async function refreshPlan() {
   }
 }
 
-/* Проверка выделенных (или всех спорных): читаем страницу главы, сверяем
-   сохранённый перевод через chrF. Дорого — по запросу на строку, поэтому
-   только по кнопке и с прогрессом. */
-async function checkRows() {
+/* Сверка одной строки плана: читаем страницу главы, достаём сохранённый
+   перевод и сравниваем по chrF. Дорого — один запрос на строку, поэтому
+   запускается кнопкой на самой строке, а не всем планом сразу. */
+async function checkRow(row) {
   if (!plan) { log('Сначала постройте план.', 'warn'); return; }
-  const rangeSet = plan.rangeSet || null;
-  const inWork = (r) => planRowRange(r, rangeSet) === '';
-  let targets = plan.rows.filter(r => selected.has(r.fi) && inWork(r));
-  if (!targets.length) targets = plan.rows.filter(r => !r.site || (r.host && String(r.host) !== String(r.fi))).filter(inWork);
-  if (!targets.length) { log('Нечего проверять: спорных строк нет. Выделите строки в панели.', 'warn'); return; }
-  log(`=== ПРОВЕРКА ${targets.length} строк (chrF) ===`, 'ok');
+  if (running) { log('Идёт работа: дождитесь окончания или нажмите «Стоп».', 'warn'); return; }
+
+  /* Проверяем ту главу, которую предлагает план: выбранную, иначе первого
+     кандидата. Строку без главы сайта проверять не на чем. */
+  const probe = row.site || row.cands[0];
+  if (!probe) {
+    reports.set(row.fi, { status: 'нечего проверять', chrf: null });
+    log(`«${row.title}» — главы на сайте нет, проверять нечего (выберите её в плане).`, 'warn');
+    renderPlan();
+    return;
+  }
+
   aborted = false;
   setBusy(true);
-
+  ui.setProgress(0, 1);
   try {
-  for (let i = 0; i < targets.length; i++) {
-    if (aborted) { log('Проверка остановлена.', 'warn'); break; }
-    const row = targets[i];
-    ui.setProgress(i, targets.length);
-    const ch = parsed[row.fi];
-    try {
-      /* Проверяем ту главу, которую предлагает план: выбранную, иначе первого
-         кандидата. Строку без главы сайта проверять не на чем — и это надо
-         сказать в логе: молча пропущенная строка выглядит как зависшая
-         проверка, ведь её номер в ленте не появляется. */
-      const probe = row.site || row.cands[0];
-      if (!probe) {
-        reports.set(row.fi, { status: 'нечего проверять', chrf: null });
-        log(`[${i + 1}/${targets.length}] «${ch.title}» — главы на сайте нет, проверять нечего (выберите её в плане).`, 'warn');
-        continue;
-      }
-      const { html, doc } = await getDoc(siteUrl(bookIdFromUrl(), probe.chapterId));
-      await globalPause(CFG.intraMs, 0);
-      const userId = userIdFromHtml(html);
-      if (!userId) { log('Нет данных пользователя — вы залогинены?', 'err'); break; }
-      const pairs = readChapterIds(doc, userId);
-      if (!pairs.length) { reports.set(row.fi, { status: 'нет перевода', chrf: null }); log(`[${i + 1}/${targets.length}] «${ch.title}» — нет вашего перевода.`, 'warn'); continue; }
-      const savedText = readSavedText(doc, pairs[0].trId);
-      if (savedText == null) { reports.set(row.fi, { status: 'на сайте пусто', chrf: null }); log(`[${i + 1}/${targets.length}] «${ch.title}» — на сайте пусто.`, 'plain'); continue; }
-      const res = looksLikeSameChapter(savedText, ch.text);
-      const verdict = chrfVerdict(res.chrf);
-      reports.set(row.fi, { status: verdict === 'off' ? 'chrF (без порога)' : verdict === 'good' ? 'похожа' : 'НЕ похожа', chrf: res.chrf });
-      log(`[${i + 1}/${targets.length}] «${ch.title}» ↔ id=${probe.chapterId}: chrF ${res.chrf.toFixed(3)} — ${verdict === 'off' ? 'порог не задан, судить нечем' : verdict === 'good' ? 'та же глава' : 'НЕ та глава'}`, verdict === 'bad' ? 'err' : 'ok');
-      renderPlan();
-    } catch (e) {
-      /* Причина человеческим текстом: у fetch-сбоя message бывает пустым
-         («Failed to fetch» приходит как TypeError без текста), и строка
-         «ошибка:» без причины ничего не объясняет. */
-      const why = (e && (e.message || e.name)) || String(e) || 'неизвестная причина';
-      reports.set(row.fi, { status: 'ошибка', chrf: null });
-      log(`[${i + 1}/${targets.length}] «${ch.title}» — ошибка: ${why}`, 'err');
+    const { html, doc } = await getDoc(siteUrl(bookIdFromUrl(), probe.chapterId));
+    const userId = userIdFromHtml(html);
+    if (!userId) { log('Нет данных пользователя — вы залогинены?', 'err'); return; }
+    const pairs = readChapterIds(doc, userId);
+    if (!pairs.length) {
+      reports.set(row.fi, { status: 'нет перевода', chrf: null });
+      log(`«${row.title}» — нет вашего перевода на этой главе.`, 'warn');
+      return;
     }
-    await globalPause(CFG.dryMs, 0);
-  }
-  ui.setProgress(targets.length, targets.length);
-  log('=== ПРОВЕРКА ЗАВЕРШЕНА ===', 'ok');
+    const savedText = readSavedText(doc, pairs[0].trId);
+    if (savedText == null) {
+      reports.set(row.fi, { status: 'на сайте пусто', chrf: null });
+      log(`«${row.title}» — на сайте пусто.`, 'plain');
+      return;
+    }
+    /* Текст главы из файла лежит в разобранном списке, а не в строке плана:
+       строка плана — про сопоставление, а не про содержимое. */
+    const src = (parsed[row.fi] && parsed[row.fi].text) || '';
+    if (!src) {
+      reports.set(row.fi, { status: 'нет текста в файле', chrf: null });
+      log(`«${row.title}» — в файле нет текста этой главы, сверять нечего.`, 'warn');
+      return;
+    }
+    const res = looksLikeSameChapter(savedText, src);
+    const verdict = chrfVerdict(res.chrf);
+    reports.set(row.fi, { status: verdict === 'off' ? 'chrF (без порога)' : verdict === 'good' ? 'похожа' : 'НЕ похожа', chrf: res.chrf });
+    log(`«${row.title}» ↔ id=${probe.chapterId}: chrF ${res.chrf.toFixed(3)} — `
+      + (verdict === 'off' ? 'порог не задан, судить нечем' : verdict === 'good' ? 'та же глава' : 'НЕ та глава'),
+    verdict === 'bad' ? 'err' : 'ok');
+  } catch (e) {
+    /* Причина человеческим текстом: у сетевого сбоя message бывает пустым. */
+    const why = (e && (e.message || e.name)) || String(e) || 'неизвестная причина';
+    reports.set(row.fi, { status: 'ошибка', chrf: null });
+    log(`«${row.title}» — ошибка: ${why}`, 'err');
   } finally {
-    /* Кнопки разблокируются при любом исходе: поломка на одной строке не
-       должна оставлять «Старт» и «Стоп» в положении «идёт работа». */
+    ui.setProgress(1, 1);
     setBusy(false);
     renderPlan();
   }
@@ -1787,13 +1820,6 @@ async function checkRows() {
 
 /* ---------- события таблицы ---------- */
 $('ru-plan-filter').onchange = () => { touched = new Set(); renderPlan(); };
-$('ru-plan-check').onclick = () => checkRows();
-$('ru-plan-reset').onclick = () => {
-  if (!plan || !selected.size) { log('Выделите строки в таблице.', 'warn'); return; }
-  const n = planResetSelected(plan, parsed, [...selected]);
-  log(`Возвращено к решению скрипта: ${n}`, 'ok');
-  renderPlan();
-};
 
 /* ---------- переключатель панели ---------- */
 /* Панель — часть страницы, а не окно поверх неё: она появляется над
@@ -1872,7 +1898,6 @@ $('ru-file').addEventListener('change', (e) => {
     $('ru-start').disabled = valid.length === 0;
     plan = null;
     site = null;
-    selected = new Set();
     reports = new Map();
     $('ru-plan-filter').value = 'all';
     renderPlan();
@@ -1919,10 +1944,8 @@ async function launch() {
   const rangeStr = $('ru-range').value.trim();
   if (plan) planSetRange(plan, rangeStr);
 
-  /* Выделение — это фильтр «что проверять», а не «что лить»: заливка идёт
-     по всему плану, а строку, которую лить не надо, отмечают «не выбрана». */
-  const onlyFi = null;
-  if (selected.size) log(`Выделено ${selected.size} строк (для «Проверить»); заливка идёт по всему плану.`, 'plain');
+  /* Строку, которую лить не надо, отмечают «не выбрана» в её списке:
+     отдельного выделения строк в плане больше нет. */
 
   setBusy(true);
   log('=== ЗАПУСК ===', 'ok');

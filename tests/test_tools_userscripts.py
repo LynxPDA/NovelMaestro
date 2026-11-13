@@ -249,16 +249,43 @@ def test_rulate_panel_invariants():
         "на мобильном у лога нет своего потолка высоты"
     assert "#ru-bulk .ru-pr-title { flex: 1 1 auto; order: 1; }" in text, \
         "на мобильном название главы не делит строку с галочкой"
-    assert "#ru-bulk .ru-plan-row > input[type=checkbox] { order: 0; }" in text, \
-        "на мобильном галочка стоит отдельной строкой"
+    assert "#ru-bulk .ru-pr-probe { order: 3; }" in text, \
+        "на мобильном кнопка сверки не встала справа от названия"
 
     # ── логика, которая не должна пострадать от переделки вида ──
     assert 'id="ru-plan-filter"' in text, "фильтр плана не список"
     assert 'id="ru-plan-issues"' not in text, "в плане остался чекбокс «только спорные»"
     assert '>Только спорные</option>' in text, "в фильтре нет пункта «Только спорные»"
-    assert '>Проверить выбранные (chrF)</button>' in text, "кнопка проверки не названа chrF"
-    assert text.index('id="ru-plan-check"') < text.index('id="ru-plan-reset"'), \
-        "кнопки «Проверить» и «Сбросить» стоят не в том порядке"
+    # проверка — кнопкой на строке, кнопок над планом нет
+    assert 'id="ru-plan-check"' not in text, "вернулась кнопка «Проверить выбранные»"
+    assert 'id="ru-plan-reset"' not in text, "вернулась кнопка «Сбросить»"
+    assert "async function checkRow(row)" in text, "нет сверки одной главы по кнопке строки"
+    assert "probe.title = 'Сверить эту главу с переводом на сайте (chrF)'" in text, \
+        "у кнопки сверки нет подсказки при наведении"
+    assert "'<svg viewBox=\"0 0 16 16\"" in text or "<svg viewBox=\"0 0 16 16\"" in text, \
+        "у кнопки сверки нет иконки"
+
+    # чекбоксов в плане нет: строку не выделяют, а льют или пропускают
+    assert "tr.append(num, title, arrow, cell, chrf, probe);" in text, \
+        "в строке плана снова галочка выделения"
+    assert "type = 'checkbox'" not in text, "в таблице плана вернулись чекбоксы"
+
+    # шапка таблицы подписана
+    assert "В файле" in text and "На сайте" in text, "у колонок плана нет подписей"
+    assert "ru-plan-head" in text, "нет шапки таблицы плана"
+
+    # названия на сайте без кавычек
+    assert "o.textContent = `${c.title} · id=${c.id}${sc}`;" in text, \
+        "название главы сайта снова в кавычках"
+
+    # выбор файла назван словами
+    assert '>Выбрать файл с главами</button>' in text, "кнопка выбора файла не названа словами"
+    assert 'Плана нет — выберите файл с главами' in text, \
+        "пустое состояние плана говорит не про файл с главами"
+
+    # список глав строится сразу, а не по раскрытию
+    assert "fillSelect(select, row);" in text, "список глав не заполняется при построении плана"
+    assert "dataset.filled" not in text, "вернулась ленивая подгрузка списка по раскрытию"
     assert "if (group.length > 1) b.list = group;" in text, \
         "кандидаты снова только у спорных строк"
     assert not re.search(r"localStorage\.setItem\(storeKey", text), \

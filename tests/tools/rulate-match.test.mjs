@@ -87,7 +87,7 @@ function boot(site) {
   const api = new Function(
     'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
     BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, planMatches, run, chrf, looksLikeSameChapter,'
-      + ' buildPlan, planAssign, writePlan, planResetSelected,'
+      + ' buildPlan, planAssign, writePlan,'
       + ' parseChrfThreshold,'
       + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange,'
       + ' titleScore, rankCandidates, candOptions, etaParts, formatEta, progressText,'
@@ -109,6 +109,78 @@ function boot(site) {
   api.CFG.intraMs = 0;
   return { api, posts };
 }
+
+/** Фиктивный сайт со страницами оглавления. У Rulate пейджер показывает
+ *  только крайние и соседние номера, поэтому середину видит лишь тот, кто
+ *  забирает страницы подряд, а не по ссылкам. */
+function bootPaged(pages) {
+  const anchorsFor = (pageNo) => {
+    const shown = new Set([1, pages.length, pageNo, pageNo + 1, pageNo - 1]);
+    return [...shown].filter((n) => n >= 1 && n <= pages.length).map((n) => ({
+      href: `?Chapter_page=${n}`,
+      getAttribute: () => `?Chapter_page=${n}`,
+      textContent: String(n),
+    }));
+  };
+  const anchorsOn = (pageNo) => pages[pageNo - 1].anchors;
+  const pagerOn = (pageNo) => anchorsFor(pageNo);
+
+  /* Открытая страница книги — «документ»: на нём скрипт читает оглавление
+     первой страницы и ссылки пейджера. Функция нужна, чтобы у каждой
+     страницы был полный набор разметки. */
+  const tocDoc = (pageNo) => ({
+    querySelectorAll: (sel) => (sel.includes('Chapter_page=') ? pagerOn(pageNo) : sel.includes('a[href') ? anchorsOn(pageNo) : []),
+    querySelector: () => null,
+  });
+
+  const document = {
+    querySelectorAll: (sel) => (sel.includes('Chapter_page=') ? anchorsFor(1) : sel.includes('a[href') ? anchorsOn(1) : []),
+    querySelector: (sel) => (sel.includes('csrf') ? { content: 'CSRF' } : null),
+    createElement: () => ({ set innerHTML(_v) {}, get textContent() { return ''; } }),
+  };
+
+  // страницы запрашиваются как /book/…?Chapter_page=N
+  const fetchStub = async (url) => {
+    const m = String(url).match(/Chapter_page=(\d+)/);
+    return { ok: true, status: 200, text: async () => `PAGE:${m ? m[1] : 1}` };
+  };
+
+  class Parser {
+    parseFromString(html) {
+      const m = html.match(/^PAGE:(\d+)$/);
+      if (m) return tocDoc(Number(m[1]));
+      /* Не страница оглавления — decodeHtml чужой разметки: пустой документ,
+         чтобы ссылок пейджера в нём не появилось. */
+      return { querySelectorAll: () => [], querySelector: () => null, body: { textContent: '' } };
+    }
+  }
+
+  return new Function(
+    'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
+    BODY + '\nreturn { buildSiteMap };',
+  )(document, { pathname: `/book/${BOOK}`, search: '', origin: 'https://tl.rulate.ru' },
+    fetchStub, Parser, class {}, class {});
+}
+
+test('оглавление: страницы забираются подряд, а не только по ссылкам пейджера', async () => {
+  /* У Rulate при шести страницах пейджер показывает 1, 2, 3, 4, 6 — пятой
+     ссылки нет. Обход по ссылкам оставлял целую сотню глав вне карты, и файл
+     на них говорил «НЕ НАЙДЕНА», хотя главы на сайте есть. */
+  const pages = Array.from({ length: 6 }, (_, i) => ({
+    anchors: [...Array.from({ length: 600 }, (_, k) => k + 1)]
+      .slice(i * 100, i * 100 + 100)
+      .map((num) => ({
+        href: `https://tl.rulate.ru/book/${BOOK}/${10000 + num}`,
+        textContent: `Глава ${num}`,
+        getAttribute: () => null,
+      })),
+  }));
+  const api = bootPaged(pages);
+  const site = await api.buildSiteMap(String(BOOK));
+  assert.equal(site.ordered.length, 600, 'страницы оглавления прочитаны не все');
+  assert.ok(site.byNum.has(450), 'глава с пятой страницы (её нет в пейджере) не найдена');
+  assert.equal(site.nonStandard.length, 0);
+});
 
 const run = async (site, fileLines) => {
   const { api, posts } = boot(site);
@@ -365,26 +437,6 @@ test('rulate: «не найдена» в плане не превращаетс�
   assert.ok(logs.some((l) => l.includes('ОТКАЗ')));
 });
 
-test('rulate: «сбросить» возвращает строку к решению скрипта', async () => {
-  const site = [
-    { id: 11, title: 'Глава 1. История', text: 'т' },
-    { id: 13, title: 'Глава 3. Дальше', text: 'т' },
-  ];
-  const { api, parsed, plan } = await planFor(site, [
-    '# [Глава 1. История :|: 1]', 'н1', '',
-    '# [Глава 3. Новое название :|: 3]', 'н3',
-  ]);
-  assert.equal(plan.rows[1].how, 'по номеру 3', 'номер один — скрипт решает сам');
-
-  api.planAssign(plan, 1, '11');
-  assert.equal(plan.rows[1].how, 'вручную');
-
-  api.planResetSelected(plan, parsed, [1]);
-  assert.equal(plan.rows[1].site.chapterId, '13', 'вернулось решение скрипта');
-  assert.equal(plan.rows[1].how, 'по номеру 3');
-  assert.equal(plan.rows[1].how, 'по номеру 3', 'ручная правка снята');
-});
-
 test('rulate: снятая вручную строка с кандидатами не считается неоднозначной', async () => {
   const { api, parsed, plan } = await planFor(SITE_PLAN,
     ['# [Глава 1. Новое название :|: 1]', 'н1']);
@@ -611,16 +663,6 @@ test('rulate: у сопоставленной строки тоже есть к�
   assert.equal(row.site.chapterId, '11', 'строка решена скриптом');
   assert.deepEqual(row.cands.map((c) => c.chapterId).sort(), ['11', '14'],
     'у решённой строки есть все главы с этим номером');
-});
-
-test('rulate: кандидаты у решённой строки переживают «Сбросить»', async () => {
-  const { api, parsed, plan } = await planFor(SITE_PLAN, [
-    '# [Глава 1. История :|: 1]', 'н1',
-  ]);
-  api.planAssign(plan, 0, '14');
-  api.planResetSelected(plan, parsed, [0]);
-  assert.equal(plan.rows[0].site.chapterId, '11', 'вернулось решение скрипта');
-  assert.ok(plan.rows[0].cands.length >= 2, 'список кандидатов не схлопнулся после сброса');
 });
 
 test('rulate: строки без номера кандидатов по номеру не имеют', async () => {
