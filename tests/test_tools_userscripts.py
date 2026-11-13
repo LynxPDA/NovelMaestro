@@ -193,7 +193,11 @@ def test_rulate_panel_invariants():
     text = (TOOLS / "rulate_reload" / "rulate-bulk-update.user.js").read_text(encoding="utf-8")
 
     # ── встроена в страницу, а не окно поверх неё ──
-    assert "position: fixed" not in text, \
+    # `position: fixed` допускается только у окна подтверждения свода глав:
+    # панель — часть страницы, а окно обязано висеть над ней.
+    assert "#ru-bulk {" in text
+    panel_css = text[text.index("#ru-bulk {"):text.index("#ru-confirm {")]
+    assert "position: fixed" not in panel_css, \
         "панель снова окно поверх страницы: она должна стоять над таблицей глав"
     assert "toggleBtn.id = 'ru-toggle'" in text, "нет кнопки «Обновление глав»"
     assert "className = 'btn btn-default'" in text, \
@@ -398,22 +402,34 @@ def test_rulate_panel_invariants():
     assert text.count("setBusy(true)") == 2, \
         "предупреждение включается не во всех точках запуска (их две: проверка и заливка)"
 
-    # фрагменты: раскладка по абзацам, а не пропуск
-    assert "function splitByFragments(text, fragments)" in text, \
-        "нет раскладки текста по фрагментам"
-    assert "function textParagraphs(text)" in text, "нет разбиения текста на абзацы"
-    assert "абзацев в файле ${parts.length}, фрагментов на сайте ${fragments.length}" in text, \
-        "причина отказа при несовпадении числа абзацев не названа"
-    assert "фрагмент ${i + 1}/${pairs.length} залит" in text, \
-        "запись по фрагментам не поштучная: непонятно, что залито"
-    assert "Фрагменты по абзацам" in text, "нет галочки включения раскладки по фрагментам"
-    assert "CFG.multiFragment = $('ru-multi-frag').checked ? 'split' : 'skip';" in text, \
-        "выбор раскладки не читается при запуске"
-    # сохранённый перевод и сверка — по всем фрагментам, а не по первому
-    assert ".map(p2 => readSavedText(doc, p2.trId))" in text, \
-        "сохранённый перевод читается только с первого фрагмента: сверка даст ложный отказ"
-    # разбиение идёт до norm: та схлопывает пустые строки и съедает границы абзацев
-    assert "Разбиение идёт ДО `norm`" in text, "границы абзацев схлопываются нормализацией"
+    # фрагменты: разбитая глава сводится к одному блоку
+    assert "async function removeFragment(bookId, chapterId, origId)" in text, \
+        "нет удаления лишних фрагментов: глава останется разбитой"
+    assert "`/book/${bookId}/${chapterId}/${origId}/remove`" in text, \
+        "удаление идёт не тем запросом, что у сайта"
+    assert "for (let i = pairs.length - 1; i >= 1; i--)" in text, \
+        "фрагменты удаляются не с конца: id остающихся сдвигаются"
+    # согласие спрашивается до первого удаления, один раз за прогон
+    assert "function askFragments(info)" in text, "нет окна согласия на свод"
+    assert "opts.fragAnswer = answer;" in text, \
+        "ответ не запоминается: окно всплывало бы на каждой разбитой главе"
+    assert "id=\"ru-confirm-go\"" in text and "id=\"ru-confirm-skip\"" in text, \
+        "в окне нет выбора между сводом и отказом"
+    # chrF и «пропуск совпадающего» на свод не распространяются
+    assert "const savedText = merge ? null : (pairs" in text, \
+        "chrF снова сверяет разбитую главу: верная глава получит ложный отказ"
+    assert "сверка chrF пропущена" in text, \
+        "пропущенный заслон не назван в логе: читается как «проверено»"
+    # порядок записи: сначала текст, потом удаление — обрыв не оставит главу пустой
+    assert text.index("await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);") \
+        < text.index("await removeFragment(plan.bookId, info.chapterId, pairs[i].origId);"), \
+        "удаление идёт раньше записи: обрыв оставит главу пустой"
+    assert "Сводить фрагменты в один" in text, "нет галочки свода фрагментов"
+    assert "CFG.multiFragment = $('ru-multi-frag').checked ? 'merge' : 'skip';" in text, \
+        "выбор свода не читается при запуске"
+    # кнопка-весы честно говорит про разбитую главу, а не показывает ложный chrF
+    assert "сверка chrF здесь не показательна" in text, \
+        "кнопка-весы даёт ложный chrF на разбитой главе"
 
     # права на книгу: на чужой книге ни кнопки, ни панели
     assert "function canEditBook()" in text, "нет проверки прав на книгу"

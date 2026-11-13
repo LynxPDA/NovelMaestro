@@ -87,7 +87,7 @@ function boot(site) {
   const api = new Function(
     'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
     BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, planMatches, run, chrf, looksLikeSameChapter,'
-      + ' buildPlan, planAssign, writePlan, splitByFragments, textParagraphs,'
+      + ' buildPlan, planAssign, writePlan,'
       + ' parseChrfThreshold,'
       + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange,'
       + ' titleScore, rankCandidates, candOptions, etaParts, formatEta, progressText,'
@@ -181,46 +181,15 @@ test('оглавление: страницы забираются подряд, 
   assert.ok(site.byNum.has(450), 'глава с пятой страницы (её нет в пейджере) не найдена');
   assert.equal(site.nonStandard.length, 0);
 });
-
-test('фрагменты: текст раскладывается по абзацам, когда их число совпало', async () => {
-  const { api } = boot([{ id: 1, title: 'Глава 1', text: 'т' }]);
-  const text = 'Первый абзац.\n\nВторой абзац.\n\nТретий абзац.';
-  const res = api.splitByFragments(text, [{ origId: '1', trId: '1' }, { origId: '2', trId: '2' }, { origId: '3', trId: '3' }]);
-  assert.equal(res.ok, true);
-  assert.deepEqual(res.parts, ['Первый абзац.', 'Второй абзац.', 'Третий абзац.']);
-});
-
-test('фрагменты: несовпадение числа абзацев — отказ с причиной, а не догадка', async () => {
-  const { api } = boot([{ id: 1, title: 'Глава 1', text: 'т' }]);
-  const text = 'Абзац один.\n\nАбзац два.';
-  const res = api.splitByFragments(text, [
-    { origId: '1', trId: '1' }, { origId: '2', trId: '2' }, { origId: '3', trId: '3' },
-  ]);
-  assert.equal(res.ok, false);
-  assert.equal(res.parts, null);
-  assert.match(res.reason, /абзацев в файле 2, фрагментов на сайте 3/);
-});
-
-test('фрагменты: переносы внутри абзаца не считаются границей', async () => {
-  const { api } = boot([{ id: 1, title: 'Глава 1', text: 'т' }]);
-  /* Жёсткий перенос строки — это перенос внутри абзаца, а не новый
-     фрагмент: иначе одна и та же глава давала бы разное число частей. */
-  const text = 'Первый абзац,\nвторая строка.\n\nВторой абзац.';
-  const res = api.splitByFragments(text, [{ origId: '1', trId: '1' }, { origId: '2', trId: '2' }]);
-  assert.equal(res.ok, true);
-  assert.deepEqual(res.parts, ['Первый абзац,\nвторая строка.', 'Второй абзац.']);
-});
-
-const run = async (site, fileLines) => {
+/** Прогон заливки на фиктивном сайте: возвращает журнал POST'ов и лог. */
+const run = async (site, fileLines, opts) => {
   const { api, posts } = boot(site);
   const parsed = api.parseChaptersFile(fileLines.join('\n'));
   const logs = [];
-  await api.run(parsed, { dryRun: false, skipSame: false, rangeStr: '' },
+  await api.run(parsed, { dryRun: false, skipSame: false, rangeStr: '', ...opts },
     { aborted: false, log: (m) => logs.push(m), setProgress() {} });
   return { posts, logs, parsed, api };
 };
-
-/* ── разбор заголовка: «Глава N» из названия, тег — запасной ── */
 
 test('rulate: номер берётся из «Глава N» в названии, тег лишь запасной', () => {
   const { api } = boot([]);
@@ -299,6 +268,146 @@ test('rulate: одна и та же глава дважды в файле — в
 });
 
 /* ── сверка «та ли это глава» по chrF ── */
+
+
+/** Сайт с главой, разбитой на несколько фрагментов: у каждого свой orig и
+ *  свой tr_id. Журналы запросов показывают, что удалялось и что заливалось. */
+function bootFrag(nFrag, { onAsk } = {}) {
+  const posts = [];
+  const removed = [];
+  const asked = [];
+  const fragIds = Array.from({ length: nFrag }, (_, i) => ({ origId: String(500 + i), trId: String(900 + i) }));
+
+  const rows = fragIds.map((f) => {
+    const mine = { id: `t${f.trId}`, className: 'u1' };
+    return { id: `o${f.origId}`, querySelector: (sel) => (sel.includes('div[id^="t"]') ? mine : null) };
+  });
+  const savedEls = new Map(fragIds.map((f) => [`t${f.trId}`,
+    { id: `t${f.trId}`, querySelector: () => ({ innerHTML: `старый абзац ${f.trId}` }) }]));
+
+  const chapDoc = {
+    querySelectorAll: (sel) => (sel === 'tr[id^="o"]' ? rows : []),
+    querySelector: (sel) => (sel.includes('csrf') ? { content: 'CSRF' } : null),
+    getElementById: (id) => savedEls.get(id) || null,
+  };
+  const anchors = [{ href: `https://tl.rulate.ru/book/${BOOK}/1`, textContent: 'Глава 1. Заголовок', getAttribute: () => null }];
+  const document = {
+    querySelectorAll: (sel) => (sel.includes('a[href') ? anchors : []),
+    querySelector: (sel) => (sel.includes('csrf') ? { content: 'CSRF' } : null),
+    createElement: () => ({ set innerHTML(_v) {}, get textContent() { return ''; } }),
+  };
+
+  const fetchStub = async (url, init) => {
+    const u = String(url);
+    if (init && init.method === 'POST' && /\/remove$/.test(u)) {
+      removed.push((u.match(/\/(\d+)\/remove$/) || [])[1]);
+      return { ok: true, status: 200, json: async () => ({ status: 'ok' }) };
+    }
+    if (init && init.method === 'POST') {
+      const m = u.match(new RegExp(`/book/${BOOK}/(\\d+)/(\\d+)/translate`));
+      posts.push(m ? m[2] : null);
+      return { ok: true, status: 200, text: async () => '' };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => `<!--CHAP_ID:1-->new CUser({ id: 1 });\nChap = { id: 1, title: 'Глава 1. Заголовок' };`,
+    };
+  };
+
+  class Parser {
+    parseFromString(html) {
+      if (html.includes('CHAP_ID')) return chapDoc;
+      return { body: { textContent: html.replace(/<[^>]+>/g, ''), childNodes: [] }, querySelector: () => null, querySelectorAll: () => [] };
+    }
+  }
+
+  const api = new Function(
+    'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
+    BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, buildPlan, planAssign, writePlan };',
+  )(
+    document,
+    { pathname: `/book/${BOOK}`, origin: 'https://tl.rulate.ru' },
+    fetchStub,
+    Parser,
+    class { constructor() { this.d = new Map(); } append(k, v) { this.d.set(k, v); } },
+    class {},
+  );
+  api.CFG.minChrf = 0.75;
+  api.CFG.delayMs = 0;
+  api.CFG.intraMs = 0;
+  api.CFG.delMs = 0;
+  api.CFG.verify = false;
+  api.CFG.multiFragment = 'merge';
+  return { api, posts, removed, asked };
+}
+
+const fragFile = (n) => ['# [Глава 1. Заголовок :|: 1]',
+  ...Array.from({ length: n }, (_, i) => `Новый текст ${i + 1}.`)].join('\n');
+
+const fragRun = async (n, { ask, opts } = {}) => {
+  const st = bootFrag(n);
+  const parsed = st.api.parseChaptersFile(fragFile(n));
+  const site = await st.api.buildSiteMap(String(BOOK));
+  const plan = st.api.buildPlan(parsed, site);
+  const logs = [];
+  if (opts && opts.minChrf != null) st.api.CFG.minChrf = opts.minChrf;
+  const res = await st.api.writePlan(plan, parsed,
+    {
+      dryRun: false, skipSame: false, rangeStr: '',
+      ...(ask ? { askFragmented: async (info) => { st.asked.push(info); return ask; } } : {}),
+      ...opts,
+    },
+    { aborted: false, log: (m) => logs.push(m), setProgress() {} });
+  return { ...st, res, logs };
+};
+
+test('фрагменты: текст ложится в первый, лишние удаляются с конца', async () => {
+  const { posts, removed, res, asked } = await fragRun(3, { ask: 'merge' });
+  assert.deepEqual(posts, ['500'], 'текст ушёл только в первый фрагмент');
+  assert.deepEqual(removed, ['502', '501'], 'удаление с конца: id остающихся не сдвигаются');
+  assert.equal(res.fragRemoved, 2);
+  assert.equal(res.saved, 1);
+  assert.equal(asked.length, 1, 'согласие спрашивается один раз за прогон');
+  assert.equal(asked[0].count, 3, 'в окне должно быть видно число фрагментов');
+});
+
+test('фрагменты: chrF на разбитой главе не отказывает', async () => {
+  /* Прежний текст лежит абзацами и не похож на файл: при пороге 0.75 сверка
+     отказала бы верной главе. На свод она отключается. */
+  const { posts, logs } = await fragRun(4, { ask: 'merge' });
+  assert.deepEqual(posts, ['500'], 'chrF не должен останавливать свод верной главы');
+  assert.ok(logs.some((l) => l.includes('сверка chrF пропущена')),
+    'пропущенный заслон должен быть назван, а не молча исчезнуть');
+});
+
+test('фрагменты: ответ «не трогать» пропускает разбитые главы и ничего не пишет', async () => {
+  const { posts, removed, res } = await fragRun(3, { ask: 'skip' });
+  assert.deepEqual(posts, []);
+  assert.deepEqual(removed, [], 'отказ не должен ничего удалять');
+  assert.equal(res.skipOther, 1);
+});
+
+test('фрагменты: без окна согласия разбитая глава пропускается', async () => {
+  const { posts, removed } = await fragRun(2, {});
+  assert.deepEqual(posts, []);
+  assert.deepEqual(removed, []);
+});
+
+test('фрагменты: dry-run не удаляет и не заливает', async () => {
+  const { posts, removed } = await fragRun(4, { ask: 'merge', opts: { dryRun: true } });
+  assert.deepEqual(posts, []);
+  assert.deepEqual(removed, [], 'dry-run обязан быть безопасным');
+});
+
+test('фрагменты: целая глава идёт обычным порядком, окно не спрашивается', async () => {
+  /* Порог выключен: тексты-заглушки не похожи, и chrF отказал бы — но этот
+     тест про то, что у целой главы дорога свода не включается вовсе. */
+  const { posts, removed, asked } = await fragRun(1, { ask: 'merge', opts: { minChrf: 0 } });
+  assert.deepEqual(posts, ['500']);
+  assert.deepEqual(removed, [], 'у целой главы удалять нечего');
+  assert.equal(asked.length, 0, 'вопрос про фрагменты у целой главы не возникает');
+});
 
 test('rulate: chrF различает свою главу и чужую', () => {
   const { api } = boot([]);
