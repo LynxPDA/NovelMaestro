@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rulate: массовое обновление глав из .txt
 // @namespace    https://github.com/LynxPDA/NovelMaestro
-// @version      2.15.0
+// @version      2.16.0
 // @description  Льёт перевод глав на tl.rulate.ru из .txt. Кнопка под «Оглавление:», панель в тему сайта. План сопоставления с правкой строится сам. Смена названий. Глобальная пауза с рандомом. Диапазон глав. Поиск по названию. Сверка главы (chrF). Обработка дробных/диапазонных номеров. Отчёт по ненайденным и нестандартным. Главы, разбитые на несколько фрагментов, пропускаются.
 // @author       NovelMaestro
 // @license      MIT
@@ -25,9 +25,9 @@
 (function () {
 'use strict';
 
-/* Версия панели — из meta.js (сборщик подставляет 2.15.0): вторая
+/* Версия панели — из meta.js (сборщик подставляет 2.16.0): вторая
    копия номера в разметке разъезжается с релизом. */
-const APP_VERSION = '2.15.0';
+const APP_VERSION = '2.16.0';
 
 const CFG = {
   delayMs: 2100,
@@ -37,7 +37,10 @@ const CFG = {
      каждой главе, а сверка chrF перед записью уже отсекает чужую главу. */
   verify: false,
   skipSame: true,
-  multiFragment: 'skip',
+  /* Глава, разбитая на сайте на несколько фрагментов: 'split' — разложить
+     текст по абзацам (число абзацев обязано совпасть с числом фрагментов),
+     'skip' — не трогать такие главы вовсе. */
+  multiFragment: 'split',
   diffCtx: 40,
   titleMode: 'off',
   // проверка «та ли это глава»: chrF с уже сохранённым переводом.
@@ -385,6 +388,48 @@ function readChapterIds(doc, userId) {
     if (mine) pairs.push({ origId: tr.id.slice(1), trId: mine.id.slice(1) });
   });
   return pairs;
+}
+
+/* Абзацы текста: пустая строка — граница. Именно так Rulate хранит главу,
+   разбитую на фрагменты: один фрагмент = один абзац со своим `tr_id`.
+
+   Разбиение идёт ДО `norm`: та схлопывает подряд идущие переводы строк в
+   один, и от границ абзацев не остаётся ничего — три абзаца превращались в
+   один. Нормализуется каждый абзац отдельно. */
+function textParagraphs(text) {
+  return String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split(/\n[ \t]*\n/)
+    .map(p => norm(p))
+    .filter(Boolean);
+}
+
+/* Тело фрагмента без служебной пустой ячейки: у части фрагментов текст
+   лежит внутри вложенной таблицы (сайт переключает вид фрагмента), и первая
+   ячейка там пустая — она не часть текста. */
+function fragmentText(bodyHtml) {
+  const clean = String(bodyHtml || '')
+    .replace(/<table[^>]*>[\s\S]*?<td[^>]*>[\s\S]*?<\/td>\s*<td[^>]*>/gi, '')
+    .replace(/<\/td>\s*<\/tr>[\s\S]*$/i, '');
+  return htmlToRaw(clean).trim();
+}
+
+/* Раскладка одного текста файла по фрагментам сайта.
+
+   Фрагмент на Rulate — это абзац: глава, разбитая на несколько `orig`,
+   хранит каждый абзац отдельным блоком со своим `tr_id`. Значит текст файла
+   раскладывается по границам абзацев, а не «на глазок»: число абзацев в
+   тексте обязано совпасть с числом фрагментов. Не совпало — не пишем вовсе
+   (половина текста уедет в чужой фрагмент, откатить это нельзя), причина
+   уходит в лог. Возвращает {ok, parts, reason}. */
+function splitByFragments(text, fragments) {
+  const parts = textParagraphs(text);
+  if (parts.length === fragments.length) return { ok: true, parts };
+  return {
+    ok: false,
+    parts: null,
+    reason: `абзацев в файле ${parts.length}, фрагментов на сайте ${fragments.length}`,
+  };
 }
 
 function readSavedText(doc, trId) {
@@ -786,8 +831,8 @@ function planToData(plan, parsed) {
 
 /* ---------- заливка по плану ---------- */
 /* Заливка ровно по плану: решения не пересматриваются, иначе правка человека
-   была бы игрушечной. `opts.onlyFi` — залить только эти строки (выделение),
-   `opts.skipSame` — пропускать совпадающее, `opts.rangeStr` — диапазон номеров.
+   была бы игрушечной. `opts.skipSame` — пропускать совпадающее,
+   `opts.rangeStr` — диапазон номеров.
 
    Диапазон режет работу, а не молча не находит главу: строка вне диапазона
    не идёт ни на страницу сайта, ни в счёт «не найдено». Проверка стоит
@@ -797,9 +842,7 @@ function planToData(plan, parsed) {
 async function writePlan(plan, parsed, opts, ui) {
   const rangeSet = opts.rangeStr === undefined ? (plan.rangeSet || null) : parseRange(opts.rangeStr);
   const rangeReport = opts.rangeStr === undefined ? null : parseRangeReport(opts.rangeStr);
-  const only = opts.onlyFi ? new Set(opts.onlyFi) : null;
-  const entries = plan.order.map(fi => planRow(plan, fi)).filter(Boolean)
-    .filter(r => !only || only.has(r.fi));
+  const entries = plan.order.map(fi => planRow(plan, fi)).filter(Boolean);
   const total = entries.length;
   const st = { saved: 0, wouldSave: 0, skipSame: 0, skipOther: 0, skipRange: 0, skipProblem: 0, fail: 0, titleChanged: 0, ambiguous: 0 };
   const notFoundNums = [];
@@ -812,10 +855,8 @@ async function writePlan(plan, parsed, opts, ui) {
   }
   if (rangeSet) ui.log(`Диапазон в работе: ${describeRange(rangeSet)}`, 'plain');
 
-  if (!only) {
-    st.skipProblem = plan.problems.length;
-    if (plan.problems.length) ui.log(`Проблемных в файле: ${plan.problems.length} (пропущены)`, 'warn');
-  }
+  st.skipProblem = plan.problems.length;
+  if (plan.problems.length) ui.log(`Проблемных в файле: ${plan.problems.length} (пропущены)`, 'warn');
 
   for (let job = 0; job < entries.length; job++) {
     const row = entries[job];
@@ -882,12 +923,35 @@ async function writePlan(plan, parsed, opts, ui) {
       const siteTitle = (html.match(/Chap\s*=\s*\{[\s\S]*?title:\s*'([^']*)'/) || [])[1] || (info.siteTitle || '');
       const pairs = readChapterIds(doc, userId);
       if (!pairs.length) { st.skipOther++; ui.log(`${tick} «${ch.title}» — нет вашего перевода.`, 'warn'); report(row, 'нет перевода'); continue; }
-      if (pairs.length > 1 && CFG.multiFragment === 'skip') { st.skipOther++; ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length} (>1), пропуск.`, 'warn'); report(row, 'несколько фрагментов'); continue; }
+      /* Глава на сайте бывает разбита на фрагменты: у каждого свой origId и
+         свой tr_id, и писать надо в каждый. Текст файла раскладывается по
+         абзацам — фрагмент на Rulate это абзац. Число абзацев обязано
+         совпасть с числом фрагментов; иначе не пишем ничего и говорим
+         почему: угадывание границ уводит половину текста в чужой фрагмент. */
+      let split = null;
+      if (pairs.length > 1) {
+        if (CFG.multiFragment === 'skip') { st.skipOther++; ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length} (>1), пропуск по настройке.`, 'warn'); report(row, 'несколько фрагментов'); continue; }
+        split = splitByFragments(ch.text, pairs);
+        if (!split.ok) {
+          st.skipOther++;
+          ui.log(`${tick} «${ch.title}» — разложить по фрагментам не вышло: ${split.reason}.`, 'warn');
+          ui.log('     → пропуск: границы фрагментов не угадываются, правьте такую главу вручную', 'warn');
+          report(row, 'фрагменты не разложились');
+          continue;
+        }
+        ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length}, текст разложен по абзацам`, 'plain');
+      }
 
       const { origId, trId } = pairs[0];
       ui.log(`${tick} «${ch.title}» ↔ «${siteTitle}» | chap=${info.chapterId} orig=${origId} tr=${trId} | ${ch.text.length}с`, 'plain');
 
-      const savedText = readSavedText(doc, trId);
+      /* Сохранённый перевод читается по ВСЕМ фрагментам: при разбиении
+         сравнение с первым абзацем дало бы chrF около нуля и ложный отказ
+         «глава не та». */
+      const savedText = pairs
+        .map(p2 => readSavedText(doc, p2.trId))
+        .filter(t => t != null)
+        .join('\n\n') || null;
       const same = compareAndLog(savedText, ch.text, ui);
       const titleSame = titleNorm(siteTitle) === titleNorm(ch.title);
 
@@ -935,11 +999,24 @@ async function writePlan(plan, parsed, opts, ui) {
         }
 
         if (doText) {
+          if (split) {
+            /* Каждый фрагмент — свой абзац. Пишется по порядку оглавления:
+               порядок `pairs` совпадает с порядком строк таблицы, а текст
+               разложен по абзацам в том же порядке. */
+            for (let i = 0; i < pairs.length; i++) {
+              await saveTranslation(plan.bookId, info.chapterId, pairs[i].origId, pairs[i].trId, split.parts[i], csrf);
+              ui.log(`     фрагмент ${i + 1}/${pairs.length} залит (${split.parts[i].length}с)`, 'plain');
+              if (i < pairs.length - 1) await globalPause(CFG.intraMs, 0);
+            }
+          } else {
           await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);
+          }
           if (CFG.verify) {
             await globalPause(CFG.intraMs, 0);
             const vDoc = (await getDoc(info.url)).doc;
-            const vRaw = readSavedText(vDoc, trId);
+            const vRaw = split
+              ? (pairs.map(p2 => readSavedText(vDoc, p2.trId)).filter(t => t != null).join('\n\n') || null)
+              : readSavedText(vDoc, trId);
             if (norm(vRaw == null ? '' : vRaw) !== norm(ch.text)) {
               st.fail++;
               ui.log('     ВНИМАНИЕ: после сохранения текст не совпал!', 'err');
@@ -1323,6 +1400,34 @@ function findAddChaptersButton() {
   return findSiteButton([/^связанные переводы/, /^добавить глав/]);
 }
 
+/* Скрипты самой страницы одним текстом: в них лежат `new CUser({id})` и
+   `new CBook({owner_id})`, и читать их надёжнее, чем обращаться к глобальным
+   переменным — в песочнице менеджера скриптов они не видны. */
+function pageInlineScripts() {
+  let out = '';
+  for (const s of document.querySelectorAll('script:not([src])')) out += '\n' + (s.textContent || '');
+  return out;
+}
+
+function bookOwnerFromHtml(html) {
+  const m = String(html || '').match(/new\s+CBook\(\{[\s\S]{0,4000}?owner_id:\s*(\d+)/);
+  return m ? m[1] : null;
+}
+
+/* Права на книгу: панель пишет переводы, и на чужой книге её место — нигде.
+   Два признака, оба со страницы: владелец из `new CBook({owner_id})` и
+   кнопки правки, которые сайт рисует только автору перевода и переводчикам
+   («Связанные переводы», «Добавить главы»). Не залогинен — писать некому,
+   и панель не нужна тоже. */
+function canEditBook() {
+  const scripts = pageInlineScripts();
+  const uid = userIdFromHtml(scripts);
+  if (!uid) return false;
+  const owner = bookOwnerFromHtml(scripts);
+  if (owner && String(owner) === String(uid)) return true;
+  return !!findAddChaptersButton();
+}
+
 function findChapterAnchor() {
   const table = document.querySelector('#Chapters');
   const box = (table && table.closest('.for_table_container')) || null;
@@ -1347,6 +1452,11 @@ function findTocHeading(table) {
   }
   return best;
 }
+
+/* На чужой книге панели нет вовсе: скрипт пишет переводы, и предлагать это
+   там, где прав нет, значит обещать действие, которого не будет. Проверка
+   стоит до построения разметки — тогда не остаётся ни кнопки, ни панели. */
+if (canEditBook()) {
 
 const panel = document.createElement('div');
 panel.id = 'ru-bulk';
@@ -1377,7 +1487,7 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
   <div class="ru-row">
     <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none">
     <button id="ru-pick">Выбрать файл с главами</button>
-    <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Главы, разбитые на сайте на несколько фрагментов, пропускаются: один текст файла не делится на них один-к-одному">Старт</button>
+    <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Глава, разбитая на сайте на несколько фрагментов, раскладывается по абзацам: каждый абзац текста идёт в свой фрагмент">Старт</button>
     <button id="ru-stop" disabled>Стоп</button>
   </div>
   <div class="ru-row">
@@ -1413,6 +1523,7 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
   <div class="ru-row">
     <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label>
     <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label>
+    <label title="Глава на сайте разбита на несколько фрагментов: разложить текст файла по абзацам. Число абзацев должно совпасть с числом фрагментов, иначе глава пропускается с причиной в логе"><input type="checkbox" id="ru-multi-frag" ${CFG.multiFragment === 'split' ? 'checked' : ''}> Фрагменты по абзацам</label>
   </div>
   <div class="ru-row">
     <span class="ru-muted">Названия глав:</span>
@@ -1998,6 +2109,7 @@ async function launch() {
   CFG.delayMs = parseInt($('ru-delay').value, 10) || 2500;
   CFG.jitterMs = parseInt($('ru-jitter').value, 10) || 0;
   CFG.titleMode = $('ru-title-mode').value;
+  CFG.multiFragment = $('ru-multi-frag').checked ? 'split' : 'skip';
   const rangeStr = $('ru-range').value.trim();
   if (plan) planSetRange(plan, rangeStr);
 
@@ -2007,7 +2119,7 @@ async function launch() {
   setBusy(true);
   log('=== ЗАПУСК ===', 'ok');
   try {
-    const res = await run(parsed, { dryRun: false, skipSame: CFG.skipSame, rangeStr, plan, onlyFi }, ui);
+    const res = await run(parsed, { dryRun: false, skipSame: CFG.skipSame, rangeStr, plan }, ui);
     if (res && res.reports) {
       reports = new Map(res.reports.map(r => [r.fi, r]));
       plan = res.plan || plan;
@@ -2021,4 +2133,6 @@ async function launch() {
 $('ru-start').onclick = () => launch();
 
 log('Готово. Выберите файл с главами — план построится сам.', 'ok');
+
+}  /* canEditBook */
 })();

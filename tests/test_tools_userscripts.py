@@ -398,10 +398,30 @@ def test_rulate_panel_invariants():
     assert text.count("setBusy(true)") == 2, \
         "предупреждение включается не во всех точках запуска (их две: проверка и заливка)"
 
-    # ограничение по фрагментам сказано и в панели, и в README
-    assert "несколько фрагментов" in text, "в логе нет упоминания пропуска фрагментированных глав"
-    assert "разбитые на сайте на несколько фрагментов" in text, \
-        "подсказка «Старт» молчит об ограничении по фрагментам"
+    # фрагменты: раскладка по абзацам, а не пропуск
+    assert "function splitByFragments(text, fragments)" in text, \
+        "нет раскладки текста по фрагментам"
+    assert "function textParagraphs(text)" in text, "нет разбиения текста на абзацы"
+    assert "абзацев в файле ${parts.length}, фрагментов на сайте ${fragments.length}" in text, \
+        "причина отказа при несовпадении числа абзацев не названа"
+    assert "фрагмент ${i + 1}/${pairs.length} залит" in text, \
+        "запись по фрагментам не поштучная: непонятно, что залито"
+    assert "Фрагменты по абзацам" in text, "нет галочки включения раскладки по фрагментам"
+    assert "CFG.multiFragment = $('ru-multi-frag').checked ? 'split' : 'skip';" in text, \
+        "выбор раскладки не читается при запуске"
+    # сохранённый перевод и сверка — по всем фрагментам, а не по первому
+    assert ".map(p2 => readSavedText(doc, p2.trId))" in text, \
+        "сохранённый перевод читается только с первого фрагмента: сверка даст ложный отказ"
+    # разбиение идёт до norm: та схлопывает пустые строки и съедает границы абзацев
+    assert "Разбиение идёт ДО `norm`" in text, "границы абзацев схлопываются нормализацией"
+
+    # права на книгу: на чужой книге ни кнопки, ни панели
+    assert "function canEditBook()" in text, "нет проверки прав на книгу"
+    assert "function bookOwnerFromHtml(html)" in text, "владелец книги не читается со страницы"
+    assert "if (canEditBook()) {" in text, "проверка прав не стоит перед построением панели"
+    assert "owner_id" in text, "владелец не берётся из new CBook({owner_id})"
+    assert "if (!canEditBook()) return false;" not in text, \
+        "права проверяются до появления признаков правки" 
 
 
 def test_lite_modals_close_only_explicitly():

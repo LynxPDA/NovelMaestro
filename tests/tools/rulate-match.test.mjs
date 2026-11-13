@@ -87,7 +87,7 @@ function boot(site) {
   const api = new Function(
     'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
     BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, planMatches, run, chrf, looksLikeSameChapter,'
-      + ' buildPlan, planAssign, writePlan,'
+      + ' buildPlan, planAssign, writePlan, splitByFragments, textParagraphs,'
       + ' parseChrfThreshold,'
       + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange,'
       + ' titleScore, rankCandidates, candOptions, etaParts, formatEta, progressText,'
@@ -180,6 +180,35 @@ test('оглавление: страницы забираются подряд, 
   assert.equal(site.ordered.length, 600, 'страницы оглавления прочитаны не все');
   assert.ok(site.byNum.has(450), 'глава с пятой страницы (её нет в пейджере) не найдена');
   assert.equal(site.nonStandard.length, 0);
+});
+
+test('фрагменты: текст раскладывается по абзацам, когда их число совпало', async () => {
+  const { api } = boot([{ id: 1, title: 'Глава 1', text: 'т' }]);
+  const text = 'Первый абзац.\n\nВторой абзац.\n\nТретий абзац.';
+  const res = api.splitByFragments(text, [{ origId: '1', trId: '1' }, { origId: '2', trId: '2' }, { origId: '3', trId: '3' }]);
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.parts, ['Первый абзац.', 'Второй абзац.', 'Третий абзац.']);
+});
+
+test('фрагменты: несовпадение числа абзацев — отказ с причиной, а не догадка', async () => {
+  const { api } = boot([{ id: 1, title: 'Глава 1', text: 'т' }]);
+  const text = 'Абзац один.\n\nАбзац два.';
+  const res = api.splitByFragments(text, [
+    { origId: '1', trId: '1' }, { origId: '2', trId: '2' }, { origId: '3', trId: '3' },
+  ]);
+  assert.equal(res.ok, false);
+  assert.equal(res.parts, null);
+  assert.match(res.reason, /абзацев в файле 2, фрагментов на сайте 3/);
+});
+
+test('фрагменты: переносы внутри абзаца не считаются границей', async () => {
+  const { api } = boot([{ id: 1, title: 'Глава 1', text: 'т' }]);
+  /* Жёсткий перенос строки — это перенос внутри абзаца, а не новый
+     фрагмент: иначе одна и та же глава давала бы разное число частей. */
+  const text = 'Первый абзац,\nвторая строка.\n\nВторой абзац.';
+  const res = api.splitByFragments(text, [{ origId: '1', trId: '1' }, { origId: '2', trId: '2' }]);
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.parts, ['Первый абзац,\nвторая строка.', 'Второй абзац.']);
 });
 
 const run = async (site, fileLines) => {
@@ -407,18 +436,6 @@ test('rulate: заливка идёт строго по плану, догадк
     { aborted: false, log: (m) => logs.push(m), setProgress() {} });
   assert.deepEqual(posts, ['14', '12'], 'спорная глава ушла туда, куда указал человек');
   assert.equal(res.saved, 2);
-});
-
-test('rulate: «только выделенные» льёт выбранные строки и ничего больше', async () => {
-  const { api, posts, parsed, plan } = await planFor(SITE_PLAN, [
-    '# [Глава 1. История :|: 1]', 'н1', '',
-    '# [Глава 2. Вторая попытка :|: 2]', 'н2',
-  ]);
-  const res = await api.writePlan(plan, parsed,
-    { dryRun: false, skipSame: false, rangeStr: '', onlyFi: [1] },
-    { aborted: false, log: () => {}, setProgress() {} });
-  assert.deepEqual(posts, ['12']);
-  assert.equal(res.saved, 1);
 });
 
 test('rulate: «не найдена» в плане не превращается в запись, chrF останавливает чужую', async () => {
