@@ -459,6 +459,19 @@ function planMatches(parsed, site) {
     });
   });
 
+  /* Кандидаты — всем строкам, включая уже сопоставленные. Прежний код
+     заполнял список только у спорных, и у решённой строки в <select>
+     оставалась одна глава (та, что назначена), а «посмотреть, кто ещё
+     похож» было негде. Список здесь — главы с этим номером, отсортированные
+     по похожести названия: выбор остаётся за человеком. */
+  parsed.forEach((ch, i) => {
+    if (ch.problem || ch.num == null) return;
+    const b = plan.get(i);
+    if (!b || !b.info) return;
+    const group = site.byNum.get(ch.num) || [];
+    if (group.length > 1) b.list = group;
+  });
+
   return plan;
 }
 
@@ -528,7 +541,7 @@ const titleNorm = (s) => String(s || '').normalize('NFC').toLowerCase().replace(
 
 const siteUrl = (bookId, id) => '/book/' + bookId + '/' + id;
 
-function buildPlan(parsed, site, overrides, rangeSet) {
+function buildPlan(parsed, site, rangeSet) {
   const bookId = bookIdFromUrl();
   const base = planMatches(parsed, site);
   const rows = [];
@@ -551,7 +564,6 @@ function buildPlan(parsed, site, overrides, rangeSet) {
   });
 
   const plan = { rows, order, problems, site, manual: {}, bookId, rangeSet: rangeSet || null };
-  if (overrides) applyOverrides(plan, parsed, overrides);
   resolveConflicts(plan, plan.rangeSet);
   return plan;
 }
@@ -600,7 +612,6 @@ function planAssign(plan, fi, siteId) {
   if (siteId == null || siteId === '') {
     row.site = null;
     row.how = 'пропуск (ваше решение)';
-    plan.manual[fi] = null;
     resolveConflicts(plan, plan.rangeSet);
     return { ok: true };
   }
@@ -609,7 +620,6 @@ function planAssign(plan, fi, siteId) {
   if (!hit) return { ok: false, error: 'на сайте нет главы id=' + id };
   row.site = { url: hit.url || siteUrl(plan.bookId, id), chapterId: id, siteTitle: hit.siteTitle };
   row.how = 'вручную';
-  plan.manual[fi] = id;
   resolveConflicts(plan, plan.rangeSet);
   return { ok: true };
 }
@@ -617,52 +627,6 @@ function planAssign(plan, fi, siteId) {
 /* Оверрайды: что человек решил, помнится между запусками и переживает
    перекомпиляцию файла. Ключ — номер + название главы файла: индекс строки
    после нового разбора уже другой (главы добавились или ушли). */
-const overrideKey = (ch) => `${ch.num == null ? '-' : ch.num}|${titleNorm(ch.title)}`;
-
-function applyOverrides(plan, parsed, overrides) {
-  const applied = { assigned: 0, skipped: 0, lost: 0 };
-  /* Что скрипт решил бы сам: если назначение из файла с этим совпадает, это
-     не «ручная правка» — иначе после каждого импорта весь план выглядит
-     правленым руками и перестаёт что-либо сообщать. */
-  const auto = planMatches(parsed, plan.site);
-  const autoId = (fi) => {
-    const b = auto.get(fi);
-    return b && b.info ? String(b.info.chapterId) : null;
-  };
-  for (const row of plan.rows) {
-    const key = overrideKey(parsed[row.fi]);
-    if (!Object.prototype.hasOwnProperty.call(overrides, key)) continue;
-    const id = overrides[key];
-    if (id == null) {
-      row.site = null;
-      row.how = 'пропуск (ваше решение)';
-      plan.manual[row.fi] = null;
-      applied.skipped++;
-      continue;
-    }
-    const hit = (plan.site.ordered || []).find(g => String(g.chapterId) === String(id));
-    if (!hit) { applied.lost++; continue; }
-    row.site = { url: hit.url || siteUrl(plan.bookId, String(id)), chapterId: String(id), siteTitle: hit.siteTitle };
-    row.how = autoId(row.fi) === String(id) ? 'из плана' : 'вручную';
-    plan.manual[row.fi] = String(id);
-    applied.assigned++;
-  }
-  resolveConflicts(plan, plan.rangeSet);
-  return applied;
-}
-
-function collectOverrides(plan, parsed) {
-  const out = {};
-  for (const fi of Object.keys(plan.manual)) {
-    const row = planRow(plan, Number(fi));
-    if (!row) continue;
-    const id = plan.manual[fi];
-    out[overrideKey(parsed[row.fi])] = id == null ? null : String(id);
-  }
-  return out;
-}
-
-
 /* «Сбросить»: вернуть строку к тому, что решил бы скрипт сам. Решение берём
    у planMatches — второго алгоритма сопоставления быть не должно, иначе
    «сбросить» и «План» начнут расходиться. */
@@ -671,11 +635,13 @@ function planResetSelected(plan, parsed, fis) {
   for (const fi of fis) {
     const row = planRow(plan, fi);
     if (!row) continue;
-    delete plan.manual[row.fi];
     const b = base.get(row.fi);
     if (b && b.info) {
       row.site = b.info;
-      row.cands = [];
+      /* Кандидаты не обнуляются: в <select> должны остаться все главы с этим
+         номером, иначе сразу после «Сбросить» выбор снова схлопывается в одну
+         строку. */
+      row.cands = (b && b.list) || row.cands;
       row.how = b.how || 'по номеру';
     } else {
       row.site = null;
@@ -917,7 +883,7 @@ async function run(parsed, opts, ui) {
     try { site = await buildSiteMap(bookId); }
     catch (e) { ui.log('Ошибка чтения оглавления: ' + e.message, 'err'); return { error: 'оглавление' }; }
     logSiteReport(site, ui);
-    plan = buildPlan(parsed, site, null, parseRange(opts.rangeStr));
+    plan = buildPlan(parsed, site, parseRange(opts.rangeStr));
   }
   const res = await writePlan(plan, parsed, opts, ui);
   res.plan = plan;
@@ -947,15 +913,67 @@ function logSiteReport(site, ui) {
   }
 }
 
+function candOptions(row) {
+  /* Один список на всё: выбранная глава и кандидаты по номеру. Оценка
+     считается каждой — иначе у назначенной строки числа нет вовсе, и
+     сравнить её с соседями нечем (именно так рейтинг и «пропадал»). */
+  const list = [];
+  const seen = new Set();
+  const add = (chapterId, siteTitle) => {
+    const id = String(chapterId);
+    if (seen.has(id)) return;
+    seen.add(id);
+    list.push({ chapterId: id, siteTitle });
+  };
+  if (row.site) add(row.site.chapterId, row.site.siteTitle);
+  for (const c of row.cands || []) add(c.chapterId, c.siteTitle != null ? c.siteTitle : c.title);
+  return rankCandidates(row.title, list).map((c) => ({
+    id: String(c.chapterId), title: c.siteTitle, score: c.score,
+  }));
+}
+
+/* Весь список книги в этом `<select>`: строится один раз, при первом
+   раскрытии. Порядок — как в оглавлении; уже предложенные варианты не
+   дублируются. Соседи по оглавлению поднимаются наверх: когда нумерация
+   разъехалась, верная глава обычно рядом. */
+function fillSelect(select, row) {
+  if (select.dataset.filled) return;
+  select.dataset.filled = '1';
+  const all = allSiteOptions();
+  const have = new Set([...select.querySelectorAll('option')].map(o => o.value));
+  /* Счёт считается для КАЖДОЙ главы книги, а не только для тех, что пришли
+     кандидатами по номеру: иначе «вся книга» — это список без единого числа,
+     и найти по названию главу, у которой на сайте другой номер, нечем.
+     Считается один раз, при раскрытии: на книге в тысячу глав это один
+     проход по строкам, а не построение элементов. */
+  const scored = all.map(it => ({ ...it, score: titleScore(row.title, it.title) }));
+  const anchor = row.site ? scored.findIndex(g => g.id === String(row.site.chapterId)) : -1;
+  const near = [];
+  for (const d of [1, -1, 2, -2]) if (anchor >= 0 && scored[anchor + d] && !have.has(scored[anchor + d].id)) near.push(scored[anchor + d]);
+  if (near.length) {
+    const g = document.createElement('optgroup');
+    g.label = 'рядом по оглавлению';
+    for (const it of near) g.appendChild(optionFor(it));
+    select.appendChild(g);
+  }
+  /* «Вся книга» — по убыванию похожести: то, что нужно найти, оказывается
+     наверху, а не за сотней чужих глав в порядке оглавления. */
+  const rest = scored.filter(it => !have.has(it.id)).sort((a, b2) => b2.score - a.score);
+  const gAll = document.createElement('optgroup');
+  gAll.label = `вся книга по похожести (${rest.length})`;
+  for (const it of rest) gAll.appendChild(optionFor(it));
+  select.appendChild(gAll);
+}
+
 /* ---------- UI ---------- */
-GM_addStyle(`#ru-bulk, #ru-bulk * { box-sizing: border-box !important; } #ru-bulk { position: fixed; right: 12px; bottom: 12px; z-index: 999999; width: min(680px, calc(100vw - 24px)); max-height: calc(100vh - 24px); display: flex; flex-direction: column; overflow: hidden; text-align: left !important; background: #1f2430; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 10px; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; box-shadow: 0 8px 28px rgba(0,0,0,.45); margin: 0; padding: 0; } #ru-bulk .ru-hd { flex: 0 0 auto; padding: 8px 10px; background: #2a3142; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: grab; user-select: none; margin: 0; } #ru-bulk .ru-hd:active { cursor: grabbing; } #ru-bulk .ru-hd b { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; } #ru-bulk .ru-bd { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px; margin: 0; } #ru-bulk .ru-grip { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 0 45%, #55607a 45% 55%, transparent 55% 70%, #55607a 70% 80%, transparent 80%); border-bottom-right-radius: 10px; z-index: 2; } #ru-bulk .ru-grip-nw { position: absolute; left: 0; top: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; background: linear-gradient(315deg, transparent 0 45%, #55607a 45% 55%, transparent 55% 70%, #55607a 70% 80%, transparent 80%); border-top-left-radius: 10px; z-index: 2; } #ru-bulk .ru-hd-btns { display: flex; gap: 4px; align-items: center; } #ru-bulk button#ru-close:hover { background: #d9534f !important; } #ru-bulk button { background: #2f81c4; color: #fff; border: 0; border-radius: 5px; padding: 6px 11px; cursor: pointer; margin: 0; font: inherit; user-select: none; white-space: nowrap; } #ru-bulk button.ru-sec { background: #444c5c; } #ru-bulk button.ru-go { background: #2e9e5b; } #ru-bulk button:hover { filter: brightness(1.08); } #ru-bulk button:disabled { opacity: .45; cursor: not-allowed; filter: none; } #ru-bulk .ru-log-box { min-height: 120px; max-height: 40vh; overflow-x: hidden !important; overflow-y: auto !important; background: #11151c; border: 1px solid #333; border-radius: 6px; padding: 7px !important; margin: 8px 0 0 0 !important; font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace !important; white-space: pre-wrap !important; word-break: break-word !important; text-align: left !important; } #ru-bulk .ru-log-box span { margin: 0 !important; padding: 0 !important; display: inline; } #ru-bulk .ru-bar { height: 6px; background: #333; border-radius: 3px; margin: 8px 0 0 0; overflow: hidden; } #ru-bulk .ru-bar > i { display: block; height: 100%; width: 0; background: #37c46a; transition: width .2s; } #ru-bulk .ru-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0 0 !important; padding: 0 !important; width: 100% !important; } #ru-bulk .ru-row:first-child { margin-top: 0 !important; } #ru-bulk .ru-ok { color: #7fe39a !important; } #ru-bulk .ru-err { color: #ff8585 !important; } #ru-bulk .ru-warn { color: #ffd166 !important; } #ru-bulk .ru-plain { color: #9aa3b2 !important; } #ru-bulk label { display: inline-flex; gap: 5px; align-items: center; user-select: none; cursor: pointer; white-space: nowrap; margin: 0 !important; font-weight: normal !important; } #ru-bulk input[type=number], #ru-bulk input[type=text] { width: 70px; background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; outline: none; } #ru-bulk input[type=text].ru-wide { width: 130px; } #ru-bulk select { background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; } #ru-bulk input[type=checkbox] { margin: 0 !important; transform: scale(1.1); } #ru-bulk .ru-muted { color: #9aa3b2; } #ru-bulk .ru-sep { border-top: 1px solid #3a4150; margin: 8px 0 !important; padding: 0 !important; } #ru-bulk .ru-plan-box { margin: 8px 0 0 0 !important; } #ru-bulk .ru-plan-title { margin: 0 !important; } #ru-bulk .ru-plan-title b { font-weight: 600; } #ru-bulk .ru-plan-hd { gap: 8px; } #ru-bulk .ru-plan-hd label { white-space: nowrap; } #ru-bulk .ru-plan-list { max-height: 46vh; overflow: auto; background: #11151c; border: 1px solid #333; border-radius: 6px; margin: 6px 0 0 0 !important; font: 11.5px/1.35 ui-monospace, Menlo, Consolas, monospace !important; } #ru-bulk .ru-plan-row { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; padding: 3px 6px; border-bottom: 1px solid #232936; } #ru-bulk .ru-plan-row:last-child { border-bottom: 0; } #ru-bulk .ru-plan-row.ru-pr-out { opacity: .45; } #ru-bulk .ru-plan-row.ru-pr-issue { background: #2a2113; } #ru-bulk .ru-plan-row.ru-pr-none { background: #2a1717; } #ru-bulk .ru-plan-row.ru-pr-manual { background: #12242a; } #ru-bulk .ru-pr-num { flex: 0 0 42px; color: #9aa3b2; text-align: right; } #ru-bulk .ru-pr-title { flex: 1 1 46%; min-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #6b7686; } #ru-bulk .ru-pr-sel { flex: 1 1 38%; min-width: 120px; max-width: 100%; } #ru-bulk .ru-pr-chrf { flex: 0 0 46px; text-align: right; color: #9aa3b2; } #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; } #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; } #ru-bulk .ru-pr-status { flex: 0 0 auto; margin-left: auto; color: #7f8b9c; font-size: 10.5px; }`);
+GM_addStyle(`#ru-bulk, #ru-bulk * { box-sizing: border-box !important; } #ru-bulk { position: fixed; right: 12px; bottom: 12px; z-index: 999999; width: min(680px, calc(100vw - 24px)); max-height: calc(100vh - 24px); display: flex; flex-direction: column; overflow: hidden; text-align: left !important; background: #1f2430; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 10px; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; box-shadow: 0 8px 28px rgba(0,0,0,.45); margin: 0; padding: 0; } #ru-bulk .ru-hd { flex: 0 0 auto; padding: 8px 10px; background: #2a3142; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: grab; user-select: none; margin: 0; } #ru-bulk .ru-hd:active { cursor: grabbing; } #ru-bulk .ru-hd b { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; } #ru-bulk .ru-bd { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px; margin: 0; display: flex; flex-direction: column; } #ru-bulk .ru-bd > * { flex: 0 0 auto; } #ru-bulk .ru-grip { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 0 45%, #55607a 45% 55%, transparent 55% 70%, #55607a 70% 80%, transparent 80%); border-bottom-right-radius: 10px; z-index: 2; } #ru-bulk .ru-grip-nw { position: absolute; left: 0; top: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; background: linear-gradient(315deg, transparent 0 45%, #55607a 45% 55%, transparent 55% 70%, #55607a 70% 80%, transparent 80%); border-top-left-radius: 10px; z-index: 2; } #ru-bulk .ru-hd-btns { display: flex; gap: 4px; align-items: center; } #ru-bulk button#ru-close:hover { background: #d9534f !important; } #ru-bulk button { background: #2f81c4; color: #fff; border: 0; border-radius: 5px; padding: 6px 11px; cursor: pointer; margin: 0; font: inherit; user-select: none; white-space: nowrap; } #ru-bulk button.ru-sec { background: #444c5c; } #ru-bulk button.ru-go { background: #2e9e5b; } #ru-bulk button:hover { filter: brightness(1.08); } #ru-bulk button:disabled { opacity: .45; cursor: not-allowed; filter: none; } #ru-bulk .ru-log-box { flex: 1 1 auto; min-height: 80px; overflow-x: hidden !important; overflow-y: auto !important; background: #11151c; border: 1px solid #333; border-radius: 6px; padding: 7px !important; margin: 8px 0 0 0 !important; font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace !important; white-space: pre-wrap !important; word-break: break-word !important; text-align: left !important; } #ru-bulk .ru-log-box span { margin: 0 !important; padding: 0 !important; display: inline; } #ru-bulk .ru-bar { height: 6px; background: #333; border-radius: 3px; margin: 8px 0 0 0; overflow: hidden; } #ru-bulk .ru-bar > i { display: block; height: 100%; width: 0; background: #37c46a; transition: width .2s; } #ru-bulk .ru-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0 0 !important; padding: 0 !important; width: 100% !important; } #ru-bulk .ru-row:first-child { margin-top: 0 !important; } #ru-bulk .ru-ok { color: #7fe39a !important; } #ru-bulk .ru-err { color: #ff8585 !important; } #ru-bulk .ru-warn { color: #ffd166 !important; } #ru-bulk .ru-plain { color: #9aa3b2 !important; } #ru-bulk label { display: inline-flex; gap: 5px; align-items: center; user-select: none; cursor: pointer; white-space: nowrap; margin: 0 !important; font-weight: normal !important; } #ru-bulk input[type=number], #ru-bulk input[type=text] { width: 70px; background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; outline: none; } #ru-bulk input[type=text].ru-wide { width: 130px; } #ru-bulk select { background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; } #ru-bulk input[type=checkbox] { margin: 0 !important; transform: scale(1.1); } #ru-bulk .ru-muted { color: #9aa3b2; } #ru-bulk .ru-sep { border-top: 1px solid #3a4150; margin: 8px 0 !important; padding: 0 !important; } #ru-bulk .ru-plan-box { margin: 8px 0 0 0 !important; } #ru-bulk .ru-plan-title { margin: 0 !important; } #ru-bulk .ru-plan-title b { font-weight: 600; } #ru-bulk .ru-plan-hd { gap: 8px; } #ru-bulk .ru-plan-hd label { white-space: nowrap; } #ru-bulk .ru-plan-list { max-height: 46vh; overflow: auto; background: #11151c; border: 1px solid #333; border-radius: 6px; margin: 6px 0 0 0 !important; font: 11.5px/1.35 ui-monospace, Menlo, Consolas, monospace !important; } #ru-bulk .ru-plan-row { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; padding: 3px 6px; border-bottom: 1px solid #232936; } #ru-bulk .ru-plan-row:last-child { border-bottom: 0; } #ru-bulk .ru-plan-row.ru-pr-out { opacity: .45; } #ru-bulk .ru-plan-row.ru-pr-issue { background: #2a2113; } #ru-bulk .ru-plan-row.ru-pr-none { background: #2a1717; } #ru-bulk .ru-plan-row.ru-pr-manual { background: #12242a; } #ru-bulk .ru-pr-num { flex: 0 0 42px; color: #9aa3b2; text-align: right; } #ru-bulk .ru-pr-title { flex: 1 1 46%; min-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #6b7686; } #ru-bulk .ru-pr-tgt { flex: 1 1 38%; min-width: 120px; max-width: 100%; display: flex; flex-direction: column; gap: 2px; } #ru-bulk .ru-pr-tgt select { width: 100%; } #ru-bulk .ru-pr-chrf { flex: 0 0 46px; text-align: right; color: #9aa3b2; } #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; } #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; } #ru-bulk .ru-pr-status { flex: 0 0 auto; color: #7f8b9c; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }`);
 
 const panel = document.createElement('div');
 panel.id = 'ru-bulk';
 /* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
    innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
    значения CFG здесь единственные данные, но правило одно на весь файл). */
-const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled>Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> <span class="ru-muted" id="ru-range-hint"></span> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <label title="Показать только спорные и ненайденные строки"><input type="checkbox" id="ru-plan-issues"> только спорные</label> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные строки и сверить текст (chrF)">Проверить</button> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> <span class="ru-muted" style="margin-left:6px" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span> <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 или пусто — сверка выключена."> </div> <div class="ru-row"> <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div> <div class="ru-grip ru-grip-nw" id="ru-grip-nw" title="Потяните за угол: размер и положение"></div> <div class="ru-grip" id="ru-grip" title="Потяните, чтобы изменить размер панели"></div>`;
+const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Главы, разбитые на сайте на несколько фрагментов, пропускаются: один текст файла не делится на них один-к-одному">Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> <span class="ru-muted" id="ru-range-hint"></span> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <span class="ru-muted">Показывать:</span> <select id="ru-plan-filter" title="Какие строки видны в таблице"><option value="all">Все</option><option value="issues">Только спорные</option></select> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные строки и сверить текст по chrF">Проверить выбранные (chrF)</button> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> <span class="ru-muted" style="margin-left:6px" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span> <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 или пусто — сверка выключена."> </div> <div class="ru-row"> <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div> <div class="ru-log-box" id="ru-log"></div> </div> <div class="ru-grip ru-grip-nw" id="ru-grip-nw" title="Потяните за угол: размер и положение"></div> <div class="ru-grip" id="ru-grip" title="Потяните, чтобы изменить размер панели"></div>`;
 {
   const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
   for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
@@ -992,25 +1010,21 @@ const ui = {
   setProgress: (i, n) => { $('ru-bar-fill').style.width = Math.round(i / Math.max(1, n) * 100) + '%'; },
 };
 
-/* План живёт в браузере для этой книги: перезагрузка страницы Rulate не
-   должна забирать разбор шестисот строк. Ключ — id книги, не URL панели. */
-const storeKey = () => 'rlPlan:' + (bookIdFromUrl() || '');
-function savePlanLocal() {
-  if (!plan) return;
+/* План живёт только пока открыта страница: это разбор одного прогона, а не
+   свойство книги. Хранить его в localStorage значило бы забивать память
+   браузера копией оглавления на каждую книгу — и однажды получить план от
+   прошлого файла, ничего об этом не сказав. Ключа rlPlan больше нет; старые
+   записи не читаются и безвредны. */
+
+/* Чистка прежних версий: план больше не хранится, а мусор в localStorage
+   оставался бы навсегда (по записи на каждую книгу, куда заходили). */
+function dropLegacyPlanStore() {
   try {
-    localStorage.setItem(storeKey(), JSON.stringify({
-      data: planToData(plan, parsed),
-      manual: collectOverrides(plan, parsed),
-      source: parsed.map(c => c.title),
-    }));
-  } catch (e) { /* переполнилось хранилище — не повод падать */ }
+    const id = 'rlPlan:' + (bookIdFromUrl() || '');
+    if (localStorage.getItem(id) != null) localStorage.removeItem(id);
+  } catch (e) { /* хранилище недоступно — тем более нечего чистить */ }
 }
-function loadPlanLocal() {
-  try {
-    const raw = localStorage.getItem(storeKey());
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) { return null; }
-}
+dropLegacyPlanStore();
 
 /* ---------- таблица плана ---------- */
 const allSiteOptions = () => (site ? site.ordered : []).map(g => ({ id: String(g.chapterId), title: g.siteTitle, url: g.url }));
@@ -1022,44 +1036,6 @@ const allSiteOptions = () => (site ? site.ordered : []).map(g => ({ id: String(g
    главу в каждой строке — это (строки × главы) элементов, у книги на 600
    глав их выходило 360 тысяч, и один клик по чекбоксу занимал семь секунд.
    Весь список появляется при открытии конкретного `<select>` (fillSelect). */
-function candOptions(row) {
-  const out = [];
-  const seen = new Set();
-  const push = (g, score) => {
-    const id = String(g.chapterId != null ? g.chapterId : g.id);
-    if (seen.has(id)) return;
-    seen.add(id);
-    out.push({ id, title: g.siteTitle != null ? g.siteTitle : g.title, score });
-  };
-  if (row.site) push({ chapterId: row.site.chapterId, siteTitle: row.site.siteTitle });
-  for (const c of rankCandidates(row.title, row.cands)) push(c, c.score);
-  return out;
-}
-
-/* Весь список книги в этом `<select>`: строится один раз, при первом
-   раскрытии. Порядок — как в оглавлении; уже предложенные варианты не
-   дублируются. Соседи по оглавлению поднимаются наверх: когда нумерация
-   разъехалась, верная глава обычно рядом. */
-function fillSelect(select, row) {
-  if (select.dataset.filled) return;
-  select.dataset.filled = '1';
-  const all = allSiteOptions();
-  const have = new Set([...select.querySelectorAll('option')].map(o => o.value));
-  const anchor = row.site ? all.findIndex(g => g.id === String(row.site.chapterId)) : -1;
-  const near = [];
-  for (const d of [1, -1, 2, -2]) if (anchor >= 0 && all[anchor + d] && !have.has(all[anchor + d].id)) near.push([all[anchor + d], d > 0 ? 'соседняя дальше' : 'соседняя выше']);
-  if (near.length) {
-    const g = document.createElement('optgroup');
-    g.label = 'рядом по оглавлению';
-    for (const [it] of near) g.appendChild(optionFor({ id: it.id, title: it.title }));
-    select.appendChild(g);
-  }
-  const gAll = document.createElement('optgroup');
-  gAll.label = `вся книга (${all.length})`;
-  for (const it of all) if (!have.has(it.id)) gAll.appendChild(optionFor({ id: it.id, title: it.title }));
-  select.appendChild(gAll);
-}
-
 function optionFor(c) {
   const o = document.createElement('option');
   o.value = c.id;
@@ -1126,7 +1102,7 @@ function renderPlan() {
   if (!plan || !planState.open) { box.style.display = 'none'; return; }
   box.style.display = '';
 
-  const onlyIssues = $('ru-plan-issues').checked;
+  const onlyIssues = $('ru-plan-filter').value === 'issues';
   const rangeSet = plan.rangeSet || null;
   /* «только спорные» — строки, которые ещё требуют решения. Только что
      назначенная руками строка остаётся видимой до переключения фильтра:
@@ -1194,10 +1170,9 @@ function renderPlan() {
     arrow.className = 'ru-pr-arrow';
     arrow.textContent = '→';
 
-    const cell = document.createElement('span');
-    cell.className = 'ru-pr-sel';
+    const cell = document.createElement('div');
+    cell.className = 'ru-pr-tgt';
     const select = document.createElement('select');
-    select.className = 'ru-pr-sel';
     select.title = row.site ? 'Глава на сайте: id=' + row.site.chapterId : 'Глава на сайте не определена — выберите';
     const noneOpt = document.createElement('option');
     noneOpt.value = '';
@@ -1226,21 +1201,20 @@ function renderPlan() {
       else {
         touched.add(row.fi);
         log(`Строка ${row.num != null ? row.num : '«' + row.title + '»'}: ${select.value ? 'глава сайта id=' + select.value : 'пропуск'} (вручную)`, 'plain');
-        savePlanLocal();
         refreshRow(row, tr, select);
       }
     };
-    cell.appendChild(select);
+    const status = document.createElement('span');
+    status.className = 'ru-pr-status';
+
+    cell.append(select, status);
 
     const chrf = document.createElement('span');
     chrf.className = 'ru-pr-chrf';
 
-    const status = document.createElement('span');
-    status.className = 'ru-pr-status';
-
     const tr = document.createElement('div');
     tr.className = 'ru-plan-row ' + planRowClass(row, planRowRange(row, rangeSet) !== '');
-    tr.append(sel, title, num, arrow, cell, chrf, status);
+    tr.append(sel, title, num, arrow, cell, chrf);
     paintRow(row, tr, chrf, status, rangeSet);
     list.appendChild(tr);
   }
@@ -1274,21 +1248,14 @@ async function refreshPlan() {
   try {
     site = await buildSiteMap(bookId);
     logSiteReport(site, ui);
-    const saved = loadPlanLocal();
-    const overrides = saved && saved.manual ? saved.manual : null;
-    plan = buildPlan(parsed, site, overrides, parseRange($('ru-range').value));
+    plan = buildPlan(parsed, site, parseRange($('ru-range').value));
     selected = new Set();
     touched = new Set();
     reports = new Map();
-    if (overrides && Object.keys(overrides).length) {
-      const applied = plan.rows.filter(r => r.how === 'вручную' || r.how.startsWith('пропуск (ваше')).length;
-      log(`Восстановлено ваших решений из прошлого раза: ${applied} из ${Object.keys(overrides).length}`, 'plain');
-    }
     const rr = parseRangeReport($('ru-range').value);
     if (rr.invalid.length) log(`⚠ Диапазон: не разобрано «${rr.invalid.join('», «')}»`, 'warn');
     if (rr.set) log(`Диапазон в работе: ${describeRange(rr.set)}`, 'plain');
     log(`План: строк ${plan.rows.length}, спорных ${plan.rows.filter(r => !r.site && r.cands.length).length}, не найдено ${plan.rows.filter(r => !r.site && !r.cands.length).length}. Смотрите строки с цветом.`, 'ok');
-    savePlanLocal();
     renderPlan();
     return plan;
   } catch (e) {
@@ -1359,13 +1326,12 @@ $('ru-plan').onclick = () => {
   planState.open = true;
   if (!plan) refreshPlan(); else renderPlan();
 };
-$('ru-plan-issues').onchange = () => { touched = new Set(); renderPlan(); };
+$('ru-plan-filter').onchange = () => { touched = new Set(); renderPlan(); };
 $('ru-plan-check').onclick = () => checkRows();
 $('ru-plan-reset').onclick = () => {
   if (!plan || !selected.size) { log('Выделите строки в таблице.', 'warn'); return; }
   const n = planResetSelected(plan, parsed, [...selected]);
   log(`Возвращено к решению скрипта: ${n}`, 'ok');
-  savePlanLocal();
   renderPlan();
 };
 
@@ -1549,7 +1515,7 @@ $('ru-file').addEventListener('change', (e) => {
     site = null;
     selected = new Set();
     reports = new Map();
-    $('ru-plan-issues').checked = false;
+    $('ru-plan-filter').value = 'all';
     planState.open = false;
     renderPlan();
     log(`Файл «${f.name}»: глав ${parsed.length} (валидных ${valid.length}).`, valid.length ? 'ok' : 'err');
@@ -1605,7 +1571,6 @@ async function launch(dryRun) {
       reports = new Map(res.reports.map(r => [r.fi, r]));
       plan = res.plan || plan;
       renderPlan();
-      savePlanLocal();
     }
   } finally {
     $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;

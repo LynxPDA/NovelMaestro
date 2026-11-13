@@ -206,9 +206,45 @@ def test_rulate_panel_invariants():
     assert nw, "ресайз за левый верхний угол не обрабатывается отдельно"
     assert "ol + ow - size.w" in nw.group(1) and "ot + oh - size.h" in nw.group(1), \
         "левый верхний угол не держит правый нижний на месте"
-    # размер и положение — привычка устройства, план — свойство книги
+    # размер и положение — привычка устройства; план — разбор одного прогона
     assert re.search(r"localStorage\.(setItem|getItem)\(UI_KEY", text), "размер панели не запоминается"
-    assert "'rlPlan:'" in text, "план перестал быть привязан к книге"
+    assert not re.search(r"localStorage\.setItem\(storeKey", text), \
+        "план снова пишется в localStorage: он живёт только пока открыта страница"
+    assert "dropLegacyPlanStore" in text, "прежние записи плана не чистятся"
+
+    # план-панель: фильтр списком, кнопки «Проверить выбранные (chrF)» и «Сбросить»
+    assert 'id="ru-plan-filter"' in text, "фильтр плана не список"
+    assert 'id="ru-plan-issues"' not in text, "в плане остался чекбокс «только спорные»"
+    assert '>Только спорные</option>' in text, "в фильтре нет пункта «Только спорные»"
+    assert '>Проверить выбранные (chrF)</button>' in text, "кнопка проверки не названа chrF"
+    assert text.index('id="ru-plan-check"') < text.index('id="ru-plan-reset"'), \
+        "кнопки «Проверить» и «Сбросить» стоят не в том порядке"
+
+    # кандидаты есть у всех строк: иначе в select решённой строки одна глава
+    assert "if (group.length > 1) b.list = group;" in text, \
+        "кандидаты снова только у спорных строк"
+
+    # тело панели — колонка: лог тянется вниз, а не стоит фиксированные 120px
+    assert re.search(r"#ru-bulk \.ru-bd \{[^}]*display: flex; flex-direction: column", text), \
+        "тело панели не колонка: лог не растёт вместе с панелью"
+    assert re.search(r"#ru-bulk \.ru-bd > \* \{[^}]*flex: 0 0 auto", text), \
+        "поля тела панели сжимаются вместе с логом"
+    assert re.search(r"#ru-bulk \.ru-log-box \{[^}]*flex: 1 1 auto", text), \
+        "лог не тянется: при увеличении панели под ним остаётся пустое поле"
+    assert "max-height: 40vh" not in text, \
+        "у лога снова потолок в 40vh: он перестанет расти вместе с панелью"
+
+    # статус строки лежит в колонке под своим списком выбора
+    assert "#ru-bulk .ru-pr-tgt" in text, "статус строки вынесен из колонки списка"
+    assert re.search(r"tr\.append\(sel, title, num, arrow, cell, chrf\);", text), \
+        "статус снова отдельным элементом строки: он будет плавать"
+    assert "cell.append(select, status);" in text, \
+        "статус не в колонке списка: подпись уезжает от своего выбора"
+
+    # ограничение по фрагментам сказано и в панели, и в README
+    assert "несколько фрагментов" in text, "в логе нет упоминания пропуска фрагментированных глав"
+    assert "разбитые на сайте на несколько фрагментов" in text, \
+        "подсказка «Старт» молчит об ограничении по фрагментам"
     # диапазон и план — одно правило
     assert "const inRange = (num, set)" in text and "function planRowRange" in text, \
         "правило диапазона разъехалось по местам"

@@ -87,10 +87,10 @@ function boot(site) {
   const api = new Function(
     'document', 'location', 'fetch', 'DOMParser', 'FormData', 'Blob',
     BODY + '\nreturn { CFG, parseChaptersFile, buildSiteMap, planMatches, run, chrf, looksLikeSameChapter,'
-      + ' buildPlan, planAssign, applyOverrides, collectOverrides, writePlan, planResetSelected,'
+      + ' buildPlan, planAssign, writePlan, planResetSelected,'
       + ' parseChrfThreshold,'
       + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange,'
-      + ' titleScore, rankCandidates, TITLE_SIMILAR_MIN };',
+      + ' titleScore, rankCandidates, candOptions, TITLE_SIMILAR_MIN };',
   )(
     document,
     { pathname: `/book/${BOOK}`, origin: 'https://tl.rulate.ru' },
@@ -281,9 +281,8 @@ test('rulate: ручное назначение — строку ведёт че
   assert.equal(plan.rows[0].site, null);
   assert.equal(plan.rows[0].how, 'пропуск (ваше решение)');
 
-  const overrides = api.collectOverrides(plan, parsed);
-  assert.deepEqual(overrides, { '1|глава 1. новое название': null },
-    'пропуск запоминается как «не лить», а не как «нет такого ключа»');
+  assert.equal(plan.rows[0].site, null, 'пропуск оставляет строку без главы');
+  assert.equal(api.planAssign(plan, 0, '14').ok, true, 'после пропуска строку можно назначить снова');
 });
 
 test('rulate: одна глава сайта в двух строках — видно, кто занял', async () => {
@@ -296,32 +295,6 @@ test('rulate: одна глава сайта в двух строках — ви
   assert.equal(second.site.chapterId, '11');
   assert.equal(second.host, '0', 'вторая строка помечена занятой — но выбор человека не отменён');
   assert.equal(plan.rows[0].host, '');
-});
-
-test('rulate: план переживает новый файл — ключ это номер и название', async () => {
-  const { api, parsed, plan } = await planFor(SITE_PLAN, [
-    '# [Глава 1. История :|: 1]', 'н1', '',
-    '# [Глава 2. Вторая попытка :|: 2]', 'н2',
-  ]);
-  api.planAssign(plan, 1, '14');
-  const overrides = api.collectOverrides(plan, parsed);
-  assert.deepEqual(overrides, { '2|глава 2. вторая попытка': '14' });
-
-  // файл перекомпилировали: появилась глава в начале, индексы строк съехали
-  const { api: api2, plan: plan2 } = await planFor(SITE_PLAN, [
-    '# [Пролог :|: 0]', 'н0', '',
-    '# [Глава 1. История :|: 1]', 'н1', '',
-    '# [Глава 2. Вторая попытка :|: 2]', 'н2',
-  ], (a) => { a.CFG.titleMode = 'off'; });
-  const parsed2 = api2.parseChaptersFile([
-    '# [Пролог :|: 0]', 'н0', '',
-    '# [Глава 1. История :|: 1]', 'н1', '',
-    '# [Глава 2. Вторая попытка :|: 2]', 'н2',
-  ].join('\n'));
-  const res = api2.applyOverrides(plan2, parsed2, overrides);
-  assert.equal(res.assigned, 1, 'решение нашлось по названию, а не по индексу строки');
-  const row = plan2.rows.find((r) => r.num === 2);
-  assert.equal(row.site.chapterId, '14', 'выбранная вручную глава сохранена');
 });
 
 test('rulate: заливка идёт строго по плану, догадки не пересматриваются', async () => {
@@ -383,7 +356,7 @@ test('rulate: «сбросить» возвращает строку к реше
   api.planResetSelected(plan, parsed, [1]);
   assert.equal(plan.rows[1].site.chapterId, '13', 'вернулось решение скрипта');
   assert.equal(plan.rows[1].how, 'по номеру 3');
-  assert.equal(Object.keys(api.collectOverrides(plan, parsed)).length, 0, 'ручная правка снята');
+  assert.equal(plan.rows[1].how, 'по номеру 3', 'ручная правка снята');
 });
 
 test('rulate: снятая вручную строка с кандидатами не считается неоднозначной', async () => {
@@ -597,4 +570,67 @@ test('rulate: счёт не показывается у непохожих на�
   // порог выше общего префикса: «Глава 9.» сама по себе даёт около 0.3,
   // и показывать её как «похожесть» значило бы врать
   assert.ok(api.TITLE_SIMILAR_MIN >= 0.5, 'порог не должен ловить совпадение одного префикса');
+});
+
+/* ── кандидаты видны у всех строк, а не только у спорных ── */
+
+test('rulate: у сопоставленной строки тоже есть кандидаты по номеру', async () => {
+  /* Прежний код заполнял список кандидатов только у спорных строк, поэтому
+     в <select> уже решённой строки лежала одна глава — та, что назначена —
+     и посмотреть, кто ещё похож, было негде. */
+  const { plan } = await planFor(SITE_PLAN, [
+    '# [Глава 1. История :|: 1]', 'н1',
+  ]);
+  const [row] = plan.rows;
+  assert.equal(row.site.chapterId, '11', 'строка решена скриптом');
+  assert.deepEqual(row.cands.map((c) => c.chapterId).sort(), ['11', '14'],
+    'у решённой строки есть все главы с этим номером');
+});
+
+test('rulate: кандидаты у решённой строки переживают «Сбросить»', async () => {
+  const { api, parsed, plan } = await planFor(SITE_PLAN, [
+    '# [Глава 1. История :|: 1]', 'н1',
+  ]);
+  api.planAssign(plan, 0, '14');
+  api.planResetSelected(plan, parsed, [0]);
+  assert.equal(plan.rows[0].site.chapterId, '11', 'вернулось решение скрипта');
+  assert.ok(plan.rows[0].cands.length >= 2, 'список кандидатов не схлопнулся после сброса');
+});
+
+test('rulate: строки без номера кандидатов по номеру не имеют', async () => {
+  const { plan } = await planFor(SITE_PLAN, [
+    '# [Пролог. Начало :|: 0]', 'н0',
+  ]);
+  const row = plan.rows[0];
+  assert.equal(row.num, 0);
+  assert.deepEqual(row.cands, [], 'номера 0 нет на сайте — кандидатов по номеру нет');
+});
+
+/* ── рейтинг похожести виден у каждого кандидата ── */
+
+test('rulate: оценка есть и у назначенной главы, и у остальных кандидатов', async () => {
+  /* Раньше назначенная глава попадала в список без оценки, и в select
+     выделенной строки числа не было вовсе — «рейтинг не работает». */
+  const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
+  const row = {
+    title: 'Глава 1. История',
+    site: { chapterId: 11, siteTitle: 'Глава 1. История' },
+    cands: [{ chapterId: 14, siteTitle: 'Глава 1. Дополнительная глава' }],
+  };
+  const opts = api.candOptions(row);
+  assert.deepEqual(opts.map((o) => o.id).sort(), ['11', '14']);
+  for (const o of opts) assert.equal(typeof o.score, 'number', `у главы ${o.id} нет оценки`);
+  assert.ok(opts[0].score >= 0.99, 'своя глава с тем же названием — сверху с почти единицей');
+  assert.ok(opts[0].score > opts[1].score, 'похожая глава ниже точного совпадения');
+});
+
+test('rulate: дубль главы в кандидатах не задваивает пункт списка', async () => {
+  const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
+  const row = {
+    title: 'Глава 1. История',
+    site: { chapterId: 11, siteTitle: 'Глава 1. История' },
+    cands: [{ chapterId: 11, siteTitle: 'Глава 1. История' }, { chapterId: 14, siteTitle: 'Глава 1. Доп' }],
+  };
+  const ids = api.candOptions(row).map((o) => o.id);
+  assert.deepEqual(ids.length, new Set(ids).size, 'один id — один пункт');
 });
