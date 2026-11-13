@@ -264,13 +264,74 @@ cmd_image() {
     [ -n "$version" ] || { log "нет файла VERSION в корне репозитория"; exit 1; }
     base="${NOVELMAESTRO_IMAGE:-$NOVELMAESTRO_IMAGE_DEFAULT}"
     tag="${version}-dev"
+    local stamp
+    stamp="$(_image_fingerprint)" || { log "не удалось посчитать отпечаток дерева"; exit 1; }
     log "сборка образа $base:$tag (из текущего дерева, не из реестра)"
     docker build \
         --build-arg "NOVELMAESTRO_VERSION=$tag" \
+        --label "$IMAGE_STAMP_LABEL=$stamp" \
         -t "$base:$tag" -t "$base:dev" "$REPO" || exit 1
-    log "готово: $base:$tag (он же $base:dev)"
+    log "готово: $base:$tag (он же $base:dev) · дерево ${stamp:0:12}"
     log "на проде: docker compose up -d  (compose берёт $base:dev)"
     log "релизный образ: закомментированная строка ghcr.io в своём compose"
+}
+
+# Отпечаток дерева, которое едет в образ: ровно тот набор, что видит
+# Dockerfile после .dockerignore (код, шаблоны, требования). Считается по
+# содержимому и путям, а не по дате коммита: правка после коммита — тоже
+# расхождение, и «образ устарел» должно это показывать. find, а не
+# `git ls-files`: не закоммиченный ещё файл в образ попадает, а в
+# отпечаток от git не попал бы.
+_image_fingerprint() {
+    local out
+    out="$(cd "$REPO" && find core cli web templates tools packaging \
+            run.py requirements.txt requirements-dev.txt VERSION \
+            Dockerfile .dockerignore docker-entrypoint.sh \
+            -type f \
+            ! -name '*.pyc' ! -path '*/__pycache__/*' \
+            ! -name '*.log' ! -path 'web/job_logs/*' \
+            -print0 2>/dev/null \
+        | LC_ALL=C sort -z \
+        | xargs -0 -r sha256sum \
+        | sha256sum | cut -d' ' -f1)" || return 1
+    [ -n "$out" ] || return 1
+    printf '%s' "$out"
+}
+
+# Тег образа, помеченный отпечатком собранного дерева: метка в образе, а не
+# файл рядом с репо — переживает чистку и видна из любого cwd.
+IMAGE_STAMP_LABEL="ru.novelmaestro.tree"
+
+# Полное имя локальной сборки: без репозитория docker не принимает ":dev"
+# как ссылку («invalid reference format»).
+image_dev_ref() { printf '%s:dev' "${NOVELMAESTRO_IMAGE:-$NOVELMAESTRO_IMAGE_DEFAULT}"; }
+
+image_stamp() {
+    docker image inspect --format \
+        "{{index .Config.Labels \"$IMAGE_STAMP_LABEL\"}}" \
+        "$(image_dev_ref)" 2>/dev/null || true
+}
+
+# Годен ли локальный :dev для проверки текущего дерева. Код 0 — актуален,
+# 1 — образа нет или он собран из другого дерева, 3 — docker недоступен.
+cmd_image_check() {
+    command -v docker >/dev/null 2>&1 || { log "нужен docker"; exit 3; }
+    local want got
+    want="$(_image_fingerprint)" || { log "не удалось посчитать отпечаток дерева"; exit 1; }
+    if ! docker image inspect "$(image_dev_ref)" >/dev/null 2>&1; then
+        log "локального образа $(image_dev_ref) нет — ./dev.sh image"
+        exit 1
+    fi
+    got="$(image_stamp)"
+    if [ -z "$got" ]; then
+        log "образ :dev собран до появления метки — ./dev.sh image"
+        exit 1
+    fi
+    if [ "$want" != "$got" ]; then
+        log "образ :dev устарел (дерево изменилось) — ./dev.sh image"
+        exit 1
+    fi
+    log "образ $(image_dev_ref) актуален (${want:0:12})"
 }
 
 cmd_deps() {
@@ -343,6 +404,9 @@ dev.sh — разработка NovelMaestro в venv (Linux/macOS/WSL)
   ./dev.sh image        локальный docker-образ для ручной проверки правок:
                         <VERSION>-dev и :dev (не из ghcr); свой compose берёт
                         :dev, поэтому дальше достаточно docker compose up -d
+  ./dev.sh image-check  актуален ли :dev для ТЕКУЩЕГО дерева (код 1 — устарел,
+                        соберите ./dev.sh image); отпечаток дерева лежит меткой
+                        в образе, а не файлом рядом с репо
   ./dev.sh spa          node --check по static/*.js + node --test tests/spa/
   ./dev.sh shell        bash с активированным venv
   ./dev.sh clean        удалить .venv и служебную папку .tmp/ (кэш тестов, покрытие)
@@ -366,6 +430,7 @@ case "$command" in
     status) shift || true; cmd_status "$@" ;;
     probe) shift || true; cmd_probe "$@" ;;
     image) shift || true; cmd_image "$@" ;;
+    image-check) shift || true; cmd_image_check "$@" ;;
     spa) shift || true; cmd_spa "$@" ;;
     shell) shift || true; cmd_shell "$@" ;;
     clean) shift || true; cmd_clean "$@" ;;

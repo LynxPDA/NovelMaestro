@@ -326,6 +326,41 @@ def test_local_image_is_marked_as_dev():
     assert 'ENV NOVELMAESTRO_VERSION="${NOVELMAESTRO_VERSION}"' in df
 
 
+def test_image_stamp_proves_the_tree_was_built():
+    """Свежесть локального образа доказывается, а не берётся на веру.
+
+    Правило «закончил скоуп — собери образ» словами не проверяемо: собрал
+    или нет, видно только изнутри образа. Поэтому отпечаток содержимого
+    дерева кладётся меткой в самый образ (`--label`), а `image-check`
+    сверяет его с текущим деревом. Метка, а не файл рядом с репо: чистка
+    рабочего каталога и другой cwd файл бы не сохранили, а сборка без
+    метки обязана считаться устаревшей — иначе «не собрал» выглядело бы
+    свежим.
+
+    Отпечаток считается по содержимому и путям (не по mtime и не по дате
+    коммита): правка после коммита — тоже расхождение, а переименование
+    файла — изменение дерева.
+    """
+    src = (ROOT / "dev.sh").read_text(encoding="utf-8")
+    for piece in ("_image_fingerprint()", "image_stamp()", "cmd_image_check()",
+                  "IMAGE_STAMP_LABEL", "image-check) shift"):
+        assert piece in src, "dev.sh: нет " + piece
+    body = src.split("cmd_image() {")[1].split("cmd_deps")[0]
+    assert "--label \"$IMAGE_STAMP_LABEL=$stamp\"" in body, \
+        "сборка обязана класть отпечаток меткой в образ"
+    # без репозитория docker не принимает «:dev» как ссылку — имя полное
+    assert 'printf \'%s:dev\'' in src, "имя образа обязано быть полным"
+    check = src.split("cmd_image_check() {")[1].split("cmd_deps")[0]
+    for code in ("exit 1", "exit 3"):
+        assert code in check, "image-check обязан различать «устарел» и «нет docker»"
+    assert "[ \"$want\" != \"$got\" ]" in check, \
+        "сверка отпечатка с текущим деревом пропала"
+    # git ls-files в отпечатке не годится: незакоммиченный файл в образ
+    # попадает, а в отпечаток от git не попал бы
+    assert "git ls-files" not in src.split("_image_fingerprint() {")[1] \
+        .split("cmd_image_check")[0]
+
+
 def test_release_image_takes_version_from_one_place():
     """Релизный образ собирается и по тегу, и по кнопке — из одного тега.
 
