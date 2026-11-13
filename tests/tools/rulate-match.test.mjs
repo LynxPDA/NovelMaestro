@@ -289,10 +289,15 @@ function bootFrag(nFrag, { mass = false } = {}) {
   /* Массовая форма владельца книги: чекбоксы `o[]`, скрытый CSRF и кнопка
      «Удалить фрагменты». Тест доказал, что скрипт находит её сам. */
   const massBtn = { getAttribute: (n) => (n === 'name' ? 'delorig' : n === 'value' ? '1' : null), textContent: 'Удалить фрагменты' };
+  /* Чекбоксы — так же, как на сайте: кнопка массового действия работает по
+     отмеченным `o[]`, поэтому скрипт обязан их отметить, а не положиться на
+     тело запроса. Журнал видит, что форма отправила. */
+  const massBoxes = fragIds.map((f) => ({ name: 'o[]', value: f.origId, checked: false, type: 'checkbox' }));
   const massForm = {
     getAttribute: (a) => (a === 'action' ? '/orig/massAction' : null),
     querySelector: (sel) => (sel === '[name="o[]"]' ? {} : null),
     querySelectorAll: (sel) => {
+      if (sel === 'input[type="checkbox"][name="o[]"]') return massBoxes;
       if (sel === 'input[type="hidden"]') {
         return [{ getAttribute: (n) => (n === 'name' ? 'YII_CSRF_TOKEN' : null), value: 'CSRF' }];
       }
@@ -352,7 +357,16 @@ function bootFrag(nFrag, { mass = false } = {}) {
     fetchStub,
     Parser,
     class {
-      constructor() { this.d = new Map(); }
+      /* Браузер отправляет отмеченные чекбоксы формы, поэтому заглушка
+         ведёт себя так же: берёт то, что реально стоит в чекбоксах. */
+      constructor(form) {
+        this.d = new Map();
+        if (form && form.querySelectorAll) {
+          for (const b of form.querySelectorAll('input[type="checkbox"][name="o[]"]')) {
+            if (b.checked) { if (!this.d.has(b.name)) this.d.set(b.name, []); this.d.get(b.name).push(b.value); }
+          }
+        }
+      }
       append(k, v) { if (!this.d.has(k)) this.d.set(k, []); this.d.get(k).push(v); }
       entries() { return this.d.entries(); }
     },
@@ -364,7 +378,7 @@ function bootFrag(nFrag, { mass = false } = {}) {
   api.CFG.delMs = 0;
   api.CFG.verify = false;
   api.CFG.multiFragment = 'merge';
-  return { api, posts, removed, massCalls, asked };
+  return { api, posts, removed, massCalls, asked, massBoxes };
 }
 
 const fragFile = (n) => ['# [Глава 1. Заголовок :|: 1]',
@@ -387,14 +401,27 @@ const fragRun = async (n, { ask, opts, mass } = {}) => {
   return { ...st, res, logs };
 };
 
-test('фрагменты: текст ложится в первый, лишние удаляются с конца', async () => {
-  const { posts, removed, res, asked } = await fragRun(3, { ask: 'merge' });
+test('фрагменты: текст ложится в первый, лишние снимаются одним запросом', async () => {
+  const { posts, removed, res, asked, massCalls } = await fragRun(3, { ask: 'merge', mass: true });
   assert.deepEqual(posts, ['500'], 'текст ушёл только в первый фрагмент');
-  assert.deepEqual(removed, ['502', '501'], 'удаление с конца: id остающихся не сдвигаются');
+  assert.equal(massCalls.length, 1, 'удаление одно на главу, а не по запросу на фрагмент');
+  assert.deepEqual(removed, [], 'пофрагментных запросов нет');
   assert.equal(res.fragRemoved, 2);
   assert.equal(res.saved, 1);
   assert.equal(asked.length, 1, 'согласие спрашивается один раз за прогон');
   assert.equal(asked[0].count, 3, 'в окне должно быть видно число фрагментов');
+});
+
+test('фрагменты: без массовой формы свод не врёт про успех', async () => {
+  /* Нет формы — удалять нечем. Соврать в отчёте «сведено» нельзя: глава
+     осталась бы разбитой, а счётчик сказал бы обратное. Глава уходит в
+     ошибки, и причина названа в логе. */
+  const { res, logs } = await fragRun(3, { ask: 'merge', mass: false });
+  assert.equal(res.fragRemoved, 0, 'ни один фрагмент не может считаться снятым');
+  assert.equal(res.fail, 1, 'глава обязана попасть в ошибки, а не в «залито»');
+  assert.equal(res.saved, 0);
+  assert.ok(logs.some((l) => /ОШИБКА/.test(l) && /массов/i.test(l)),
+    'причина отказа должна быть в логе: ' + logs.join(' | '));
 });
 
 test('фрагменты: при массовой форме все лишние снимаются ОДНИМ запросом', async () => {
@@ -405,17 +432,11 @@ test('фрагменты: при массовой форме все лишние
   const { posts, removed, massCalls, res } = await fragRun(4, { ask: 'merge', mass: true });
   assert.deepEqual(posts, ['500'], 'текст по-прежнему уходит только в первый фрагмент');
   assert.equal(massCalls.length, 1, 'массовое удаление должно быть одним запросом');
-  assert.deepEqual(massCalls[0].ids, ['503', '502', '501'], 'лишние перечислены списком, с конца');
-  assert.deepEqual(removed, [], 'пофрагментный путь при наличии формы не трогается');
+  assert.deepEqual(massCalls[0].ids, ['501', '502', '503'],
+    'отмечены ровно лишние фрагменты, по одному разу и как в документе');
+  assert.ok(!massCalls[0].ids.includes('500'), 'первый фрагмент не отмечается: в нём новый текст');
+  assert.deepEqual(removed, [], 'пофрагментных запросов нет вовсе: массовое удаление одно');
   assert.equal(res.fragRemoved, 3);
-});
-
-test('фрагменты: без массовой формы остаётся пофрагментное удаление', async () => {
-  /* Не владелец книги: формы нет, но страница главы умеет `orig.rm`.
-     Порядок — с конца, чтобы обрыв посередине оставил целой голову главы. */
-  const { removed, massCalls } = await fragRun(3, { ask: 'merge', mass: false });
-  assert.deepEqual(massCalls, [], 'формы нет — массового запроса быть не может');
-  assert.deepEqual(removed, ['502', '501']);
 });
 
 test('фрагменты: chrF на разбитой главе не отказывает', async () => {

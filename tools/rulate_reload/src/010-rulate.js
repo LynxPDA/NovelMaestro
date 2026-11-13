@@ -6,10 +6,6 @@ const CFG = {
   delayMs: 2100,
   jitterMs: 0,
   intraMs: 400,
-  /* Пауза между удалениями фрагментов: у главы их бывает несколько десятков,
-     и залп запросов подряд сервер вправе принять за атаку. Отдельная от
-     `intraMs` (там одна пауза внутри главы) — удаление дороже. */
-  delMs: 700,
   /* Проверка после записи по умолчанию выключена: это второй проход по
      каждой главе, а сверка chrF перед записью уже отсекает чужую главу. */
   verify: false,
@@ -394,26 +390,6 @@ async function saveTranslation(bookId, chapterId, origId, trId, body, csrf) {
   return res;
 }
 
-/* ---------- удаление фрагмента оригинала ----------
-
-   Сайт удаляет фрагмент одним POST без тела (`translate-3.js`: `orig.rm`
-   шлёт `/book/<книга>/<глава>/<origId>/remove` и ждёт JSON со `status`).
-   Фрагмент тянет за собой все свои переводы и комментарии, поэтому вызов
-   идёт только по решению человека и только после сверки главы.
-
-   Порядок удаления — С КОНЦА: он не сдвигает `origId` остающихся, и каждый
-   удалённый id остаётся годным до своего запроса. */
-async function removeFragment(bookId, chapterId, origId) {
-  const res = await fetch(`/book/${bookId}/${chapterId}/${origId}/remove`,
-    { method: 'POST', credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
-  if (!res.ok) throw new Error('POST remove ' + res.status);
-  let data = null;
-  try { data = await res.json(); } catch (e) { /* не JSON — решает статус ниже */ }
-  if (data && data.error) throw new Error(data.error);
-  if (data && data.status && data.status !== 'ok') throw new Error('remove: ' + data.status);
-  return data;
-}
-
 /* ---------- массовое удаление фрагментов ----------
 
    У владельца книги на её странице есть форма массовых действий
@@ -431,10 +407,6 @@ function massDeleteForm(root) {
   for (const f of root.querySelectorAll('form')) {
     const action = f.getAttribute('action') || '';
     if (!/massAction/.test(action)) continue;
-    /* Чекбоксы `o[]` в форме искать не нужно: какие фрагменты снимать, знает
-       скрипт, — он и перечисляет их сам. Нужны только скрытые поля (CSRF) и
-       кнопка. Требование чекбоксов внутри формы отсекало бы форму, где они
-       нарисованы в строках таблицы. */
     if (!massDeleteButton(f)) continue;
     return f;
   }
@@ -456,27 +428,46 @@ function massDeleteButton(form) {
 
 /* Удаление набора фрагментов одной операцией.
 
-   Возвращает true, если массовая форма есть и запрос прошёл, и false, если
-   формы нет — тогда решает вызывающий. Скрытые поля формы повторяются как
-   есть: там лежит `YII_CSRF_TOKEN` и прочее, без чего сайт запрос отвергнет. */
+   Кнопка массового удаления работает по отмеченным чекбоксам `o[]`: браузер
+   отправляет только отмеченные. Поэтому фрагменты сначала отмечаются в
+   самой форме — ровно так, как это сделал бы человек, — и снимаются одним
+   POST. Чужие отметки при этом не задеваются: после запроса каждому
+   чекбоксу возвращается прежнее состояние.
+
+   Возвращает число снятых фрагментов. Нет формы или кнопки — бросает
+   ошибку: молча пропустить удаление значило бы соврать в отчёте, что глава
+   сведена к одному блоку. */
 async function removeFragmentsBulk(root, origIds) {
   const form = massDeleteForm(root);
-  if (!form) return false;
+  if (!form) throw new Error('массовой формы удаления нет на странице');
   const btn = massDeleteButton(form);
-  if (!btn) return false;
+  if (!btn) throw new Error('в массовой форме нет кнопки удаления фрагментов');
 
-  const fd = new FormData();
-  form.querySelectorAll('input[type="hidden"]').forEach(i => {
-    const n = i.getAttribute('name');
-    if (n) fd.append(n, i.value);
+  const want = new Set(origIds.map(String));
+  const boxes = [];
+  form.querySelectorAll('input[type="checkbox"][name="o[]"]').forEach((box) => {
+    if (want.has(String(box.value))) boxes.push({ box, was: box.checked });
   });
-  for (const id of origIds) fd.append('o[]', id);
-  fd.append(btn.name, btn.value);
-  fd.append('ajax', '1');
-  const res = await fetch(form.getAttribute('action') || '/orig/massAction',
-    { method: 'POST', credentials: 'include', body: fd });
-  if (!res.ok) throw new Error('POST massAction ' + res.status);
-  return true;
+  /* Ни один не нашёлся — значит фрагменты этой главы перечислены не в этой
+     форме. Отправлять пустой набор нельзя: массовое действие удалило бы
+     то, что отмечено на странице сейчас. */
+  if (!boxes.length) throw new Error('фрагменты не найдены в массовой форме');
+
+  for (const b of boxes) b.box.checked = true;
+  try {
+    const fd = new FormData(form);
+    fd.append(btn.name, btn.value);
+    fd.append('ajax', '1');
+    const res = await fetch(form.getAttribute('action') || '/orig/massAction',
+      { method: 'POST', credentials: 'include', body: fd });
+    if (!res.ok) throw new Error('POST massAction ' + res.status);
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* не JSON — решает статус */ }
+    if (data && data.error) throw new Error(data.error);
+    return boxes.length;
+  } finally {
+    for (const b of boxes) b.box.checked = b.was;
+  }
 }
 
 /* ---------- POST смены названия главы ---------- */
@@ -1056,38 +1047,16 @@ async function writePlan(plan, parsed, opts, ui) {
             ui.log(`     текст залит в первый фрагмент (${ch.text.length}с)`, 'ok');
             await globalPause(CFG.intraMs, CFG.jitterMs);
 
-            /* Лишние фрагменты удаляются ОДНИМ запросом через массовую форму
-               страницы книги. Пофрагментный путь нужен только там, где формы
-               нет (не владелец книги): он дороже — запрос на каждый
-               фрагмент, — но страница главы его умеет всегда. */
-            /* С конца главы к началу: первый фрагмент остаётся под новый
-               текст, остальные снимаются последними первыми. */
-            const extraIds = pairs.slice(1).map(p2 => p2.origId).reverse();
-            let bulk = false;
-            if (extraIds.length) {
-              try {
-                bulk = await removeFragmentsBulk(doc, extraIds);
-              } catch (e) {
-                bulk = false;
-                ui.log(`     массовое удаление не прошло (${e.message}), удаляю по одному`, 'warn');
-              }
-            }
-            if (bulk) {
-              st.fragRemoved += extraIds.length;
-              ui.log(`     фрагментов удалено одним запросом: ${extraIds.length}`, 'ok');
-            } else {
-              if (extraIds.length) ui.log('     массовой формы нет — удаляю по одному', 'plain');
-              /* Порядок — как в `extraIds`: с конца главы к началу. Так
-                 лог читается сверху вниз («остаётся» убывает), а обрыв
-                 посередине оставляет целой голову главы, а не хвост. */
-              for (let i = 0; i < extraIds.length; i++) {
-                if (ui.aborted) { ui.log('     остановлено: удаление фрагментов не завершено', 'warn'); break; }
-                await removeFragment(plan.bookId, info.chapterId, extraIds[i]);
-                st.fragRemoved++;
-                ui.log(`     удалён фрагмент ${extraIds[i]} (остаётся ${extraIds.length - i - 1})`, 'plain');
-                if (i < extraIds.length - 1) await globalPause(CFG.delMs, CFG.jitterMs);
-              }
-            }
+            /* Лишние фрагменты снимаются ОДНИМ запросом: форма массовых
+               действий работает по отмеченным чекбоксам `o[]`, и тридцать
+               фрагментов — это один POST. Пофрагментное удаление тут не
+               запасной путь, а вред: у главы бывает до шестидесяти
+               фрагментов, и на книге в две тысячи глав это сто двадцать
+               тысяч запросов подряд — спам, за который сервер и банит. */
+            const extraIds = pairs.slice(1).map(p2 => p2.origId);
+            const removed = await removeFragmentsBulk(doc, extraIds);
+            st.fragRemoved += removed;
+            ui.log(`     фрагментов удалено одним запросом: ${removed}`, 'ok');
           } else {
           await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);
           }
@@ -2301,7 +2270,7 @@ function askFragments(info) {
     const p2 = document.createElement('p');
     p2.textContent = 'Сверка chrF и «пропуск совпадающего» на этой главе не работают: прежний текст '
       + 'лежит абзацами по чужой разбивке, и сравнивать его с файлом нечего. '
-      + `Остальные главы пойдут обычным порядком. Пауза между удалениями — ${CFG.delMs} мс.`;
+      + 'Лишние фрагменты снимутся одним запросом. Остальные главы пойдут обычным порядком.';
     bd.appendChild(p2);
 
     const go = document.getElementById('ru-confirm-go');

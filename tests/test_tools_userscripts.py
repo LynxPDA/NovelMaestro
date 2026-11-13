@@ -403,25 +403,31 @@ def test_rulate_panel_invariants():
         "предупреждение включается не во всех точках запуска (их две: проверка и заливка)"
 
     # фрагменты: разбитая глава сводится к одному блоку
-    assert "async function removeFragment(bookId, chapterId, origId)" in text, \
+    assert "async function removeFragmentsBulk(root, origIds)" in text, \
         "нет удаления лишних фрагментов: глава останется разбитой"
-    assert "`/book/${bookId}/${chapterId}/${origId}/remove`" in text, \
-        "удаление идёт не тем запросом, что у сайта"
     # один запрос вместо запроса на каждый фрагмент
     assert "async function removeFragmentsBulk(root, origIds)" in text, \
         "нет массового удаления: сорок фрагментов — сорок запросов"
     assert "function massDeleteForm(root)" in text, \
         "форма массовых действий не ищется на странице"
-    assert "fd.append('o[]', id);" in text, \
-        "фрагменты не перечисляются списком o[] — массовая форма так их и ждёт"
+    # кнопка массового действия работает по ОТМЕЧЕННЫМ чекбоксам: скрипт
+    # обязан их отметить, иначе сайт удалит пустой набор
+    assert "box.checked = true;" in text, \
+        "чекбоксы o[] не отмечаются: массовая кнопка удалит пустой набор"
+    assert "querySelectorAll('input[type=\"checkbox\"][name=\"o[]\"]')" in text, \
+        "чекбоксы фрагментов не ищутся в форме"
+    assert "const fd = new FormData(form);" in text, \
+        "форма отправляется не целиком: без скрытых полей (CSRF) сайт её отвергнет"
     assert "massDeleteButton(form)" in text, \
         "кнопка удаления не находится по подписи: имя поля может смениться"
     # удаление с конца: первый фрагмент остаётся под новый текст
-    assert "const extraIds = pairs.slice(1).map(p2 => p2.origId).reverse();" in text, \
-        "фрагменты удаляются не с конца: id остающихся сдвигаются"
-    # без формы — запасной пофрагментный путь, иначе свод не работает у переводчика
-    assert "await removeFragment(plan.bookId, info.chapterId, extraIds[i]);" in text, \
-        "нет запасного пофрагментного удаления: без массовой формы свод не работает"
+    assert "const extraIds = pairs.slice(1).map(p2 => p2.origId);" in text, \
+        "лишние фрагменты перечислены неверно: под новый текст остаётся первый"
+    # пофрагментного запасного пути быть не должно: до 60 фрагментов на
+    # главу и 2000+ глав — это десятки тысяч запросов подряд
+    assert "async function removeFragment(" not in text, \
+        "вернулось пофрагментное удаление: это спам для сервера"
+    assert "/remove`" not in text, "пофрагментный запрос удаления вернулся"
     # согласие спрашивается до первого удаления, один раз за прогон
     assert "function askFragments(info)" in text, "нет окна согласия на свод"
     assert "opts.fragAnswer = answer;" in text, \
