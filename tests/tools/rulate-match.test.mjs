@@ -90,7 +90,8 @@ function boot(site) {
       + ' buildPlan, planAssign, writePlan, planResetSelected,'
       + ' parseChrfThreshold,'
       + ' parseRange, parseRangeReport, planSetRange, planRowRange, describeRange,'
-      + ' titleScore, rankCandidates, candOptions, TITLE_SIMILAR_MIN };',
+      + ' titleScore, rankCandidates, candOptions, etaParts, formatEta, progressText,'
+      + ' TITLE_SIMILAR_MIN };',
   )(
     document,
     { pathname: `/book/${BOOK}`, origin: 'https://tl.rulate.ru' },
@@ -658,4 +659,58 @@ test('rulate: дубль главы в кандидатах не задваив�
   };
   const ids = api.candOptions(row).map((o) => o.id);
   assert.deepEqual(ids.length, new Set(ids).size, 'один id — один пункт');
+});
+
+/* ── прогресс: проценты и остаток времени ── */
+
+test('rulate: остаток считается по темпу последних глав', async () => {
+  const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
+  /* 10 глав за 20 секунд → 2 с/глава → от 10-й до 20-й ещё 20 секунд */
+  const marks = [];
+  for (let i = 0; i <= 10; i++) marks.push({ done: i, at: 1_000_000 + i * 2000 });
+  const eta = api.etaParts(10, 20, marks);
+  assert.ok(eta, 'темп по десяти главам посчитан');
+  assert.equal(Math.round(eta.perChapterMs), 2000);
+  assert.equal(Math.round(eta.ms / 1000), 20, 'десять оставшихся глав по две секунды');
+});
+
+test('rulate: без двух отметок остатка нет — прочерк врёт', async () => {
+  const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
+  assert.equal(api.etaParts(0, 100, []), null, 'пустая история');
+  assert.equal(api.etaParts(1, 100, [{ done: 1, at: 1 }]), null, 'одна точка не даёт темпа');
+  assert.equal(api.etaParts(5, 100, [{ done: 5, at: 100 }, { done: 5, at: 100 }]), null,
+    'окно схлопнулось: главы прошли без задержек, темпа нет');
+});
+
+test('rulate: остаток на нуле, когда всё сделано', async () => {
+  const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
+  const eta = api.etaParts(20, 20, [{ done: 0, at: 0 }, { done: 20, at: 40_000 }]);
+  assert.equal(eta.ms, 0);
+});
+
+test('rulate: остаток подписывается днями, часами, минутами', async () => {
+  const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
+  const s = 1000, m = 60 * s, h = 60 * m, d = 24 * h;
+  assert.equal(api.formatEta(45 * s), '45 с');
+  assert.equal(api.formatEta(400), '<1 с', 'субсекундный остаток не печатается как «0 с»');
+  assert.equal(api.formatEta(12 * m), '12 м');
+  assert.equal(api.formatEta(2 * h + 15 * m), '2 ч 15 м');
+  assert.equal(api.formatEta(3 * d + 4 * h), '3 д 4 ч');
+  assert.equal(api.formatEta(2 * d), '2 д', 'ровные сутки не печатаются как «2 д 0 ч»');
+  assert.equal(api.formatEta(null), '', 'нет данных — пустая строка, а не «NaN»');
+  assert.equal(api.formatEta(NaN), '', 'испорченное число не печатается');
+});
+
+test('rulate: подпись прогресса — проценты и остаток', async () => {
+  const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
+  const one = api.progressText(0, 10, []);
+  assert.equal(one, '0 из 10 (0%)', 'пока темпа нет — только счётчик, без «осталось —»');
+
+  const marks = [{ done: 0, at: 0 }, { done: 5, at: 10_000 }];
+  const txt = api.progressText(5, 10, marks);
+  assert.ok(txt.includes('5 из 10 (50%)'), 'проценты в подписи: ' + txt);
+  assert.ok(txt.includes('осталось'), 'есть остаток времени');
+  assert.ok(txt.includes('с/глава'), 'видно темп, по которому посчитан остаток');
+
+  assert.ok(api.progressText(10, 10, marks).includes('готово'), 'в конце — «готово»');
 });

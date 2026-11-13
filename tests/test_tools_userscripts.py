@@ -245,6 +245,18 @@ def test_rulate_panel_invariants():
     assert "несколько фрагментов" in text, "в логе нет упоминания пропуска фрагментированных глав"
     assert "разбитые на сайте на несколько фрагментов" in text, \
         "подсказка «Старт» молчит об ограничении по фрагментам"
+
+    # прогресс: проценты и остаток времени под полосой
+    assert 'id="ru-prog-txt"' in text, "под полосой нет подписи прогресса"
+    assert "function etaParts(done, total, samples)" in text, "остаток времени не считается"
+    assert "function formatEta(ms)" in text, "остаток не подписывается в днях/часах/минутах"
+    assert "function progressText(done, total, samples)" in text, "подпись прогресса не собрана"
+    assert "progressMarks.push({ done: i, at: Date.now() })" in text, \
+        "темп не замеряется: остаток будет считаться не по факту"
+    assert "progressMarks.length > 31" in text, "окно темпа не ограничено: старые пропуски исказят остаток"
+    assert "if (samples == null || samples.length < 2) return null;" in text, \
+        "остаток печатается без темпа: на старте будет «осталось 0 с»"
+    assert "progressMarks.length = 0;" in text, "отметки темпа не сбрасываются перед прогоном"
     # диапазон и план — одно правило
     assert "const inRange = (num, set)" in text and "function planRowRange" in text, \
         "правило диапазона разъехалось по местам"
