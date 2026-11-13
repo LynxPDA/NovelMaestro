@@ -496,6 +496,7 @@ function chrfVerdict(score) {
 }
 
 let progressMarks = [];     // {done, at} — темп заливки для остатка
+let running = false;        // идёт заливка: панель не закрывается сама
 
 /* Сколько времени ещё осталось при текущем темпе.
 
@@ -1028,20 +1029,277 @@ function fillSelect(select, row) {
 }
 
 /* ---------- UI ---------- */
-GM_addStyle(`#ru-bulk, #ru-bulk * { box-sizing: border-box !important; } #ru-bulk { position: fixed; right: 12px; bottom: 12px; z-index: 999999; width: min(680px, calc(100vw - 24px)); max-height: calc(100vh - 24px); display: flex; flex-direction: column; overflow: hidden; text-align: left !important; background: #1f2430; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 10px; font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important; box-shadow: 0 8px 28px rgba(0,0,0,.45); margin: 0; padding: 0; } #ru-bulk .ru-hd { flex: 0 0 auto; padding: 8px 10px; background: #2a3142; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: grab; user-select: none; margin: 0; } #ru-bulk .ru-hd:active { cursor: grabbing; } #ru-bulk .ru-hd b { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; } #ru-bulk .ru-bd { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px; margin: 0; display: flex; flex-direction: column; } #ru-bulk .ru-bd > * { flex: 0 0 auto; } #ru-bulk .ru-grip { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 0 45%, #55607a 45% 55%, transparent 55% 70%, #55607a 70% 80%, transparent 80%); border-bottom-right-radius: 10px; z-index: 2; } #ru-bulk .ru-grip-nw { position: absolute; left: 0; top: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; background: linear-gradient(315deg, transparent 0 45%, #55607a 45% 55%, transparent 55% 70%, #55607a 70% 80%, transparent 80%); border-top-left-radius: 10px; z-index: 2; } #ru-bulk .ru-hd-btns { display: flex; gap: 4px; align-items: center; } #ru-bulk button#ru-close:hover { background: #d9534f !important; } #ru-bulk button { background: #2f81c4; color: #fff; border: 0; border-radius: 5px; padding: 6px 11px; cursor: pointer; margin: 0; font: inherit; user-select: none; white-space: nowrap; } #ru-bulk button.ru-sec { background: #444c5c; } #ru-bulk button.ru-go { background: #2e9e5b; } #ru-bulk button:hover { filter: brightness(1.08); } #ru-bulk button:disabled { opacity: .45; cursor: not-allowed; filter: none; } #ru-bulk .ru-log-box { flex: 1 1 auto; min-height: 80px; overflow-x: hidden !important; overflow-y: auto !important; background: #11151c; border: 1px solid #333; border-radius: 6px; padding: 7px !important; margin: 8px 0 0 0 !important; font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace !important; white-space: pre-wrap !important; word-break: break-word !important; text-align: left !important; } #ru-bulk .ru-log-box span { margin: 0 !important; padding: 0 !important; display: inline; } #ru-bulk .ru-bar { height: 6px; background: #333; border-radius: 3px; margin: 8px 0 0 0; overflow: hidden; } #ru-bulk .ru-bar > i { display: block; height: 100%; width: 0; background: #37c46a; transition: width .2s; } #ru-bulk .ru-prog { margin: 4px 0 0 0 !important; } #ru-bulk .ru-prog #ru-prog-txt { font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace; color: #9aa3b2; } #ru-bulk .ru-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 0 0 !important; padding: 0 !important; width: 100% !important; } #ru-bulk .ru-row:first-child { margin-top: 0 !important; } #ru-bulk .ru-ok { color: #7fe39a !important; } #ru-bulk .ru-err { color: #ff8585 !important; } #ru-bulk .ru-warn { color: #ffd166 !important; } #ru-bulk .ru-plain { color: #9aa3b2 !important; } #ru-bulk label { display: inline-flex; gap: 5px; align-items: center; user-select: none; cursor: pointer; white-space: nowrap; margin: 0 !important; font-weight: normal !important; } #ru-bulk input[type=number], #ru-bulk input[type=text] { width: 70px; background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; outline: none; } #ru-bulk input[type=text].ru-wide { width: 130px; } #ru-bulk select { background: #11151c; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px; padding: 3px 5px; font: inherit; margin: 0; } #ru-bulk input[type=checkbox] { margin: 0 !important; transform: scale(1.1); } #ru-bulk .ru-muted { color: #9aa3b2; } #ru-bulk .ru-sep { border-top: 1px solid #3a4150; margin: 8px 0 !important; padding: 0 !important; } #ru-bulk .ru-plan-box { margin: 8px 0 0 0 !important; } #ru-bulk .ru-plan-title { margin: 0 !important; } #ru-bulk .ru-plan-title b { font-weight: 600; } #ru-bulk .ru-plan-hd { gap: 8px; } #ru-bulk .ru-plan-hd label { white-space: nowrap; } #ru-bulk .ru-plan-list { max-height: 46vh; overflow: auto; background: #11151c; border: 1px solid #333; border-radius: 6px; margin: 6px 0 0 0 !important; font: 11.5px/1.35 ui-monospace, Menlo, Consolas, monospace !important; } #ru-bulk .ru-plan-row { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; padding: 3px 6px; border-bottom: 1px solid #232936; } #ru-bulk .ru-plan-row:last-child { border-bottom: 0; } #ru-bulk .ru-plan-row.ru-pr-out { opacity: .45; } #ru-bulk .ru-plan-row.ru-pr-issue { background: #2a2113; } #ru-bulk .ru-plan-row.ru-pr-none { background: #2a1717; } #ru-bulk .ru-plan-row.ru-pr-manual { background: #12242a; } #ru-bulk .ru-pr-num { flex: 0 0 42px; color: #9aa3b2; text-align: right; } #ru-bulk .ru-pr-title { flex: 1 1 46%; min-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #6b7686; } #ru-bulk .ru-pr-tgt { flex: 1 1 38%; min-width: 120px; max-width: 100%; display: flex; flex-direction: column; gap: 2px; } #ru-bulk .ru-pr-tgt select { width: 100%; } #ru-bulk .ru-pr-chrf { flex: 0 0 46px; text-align: right; color: #9aa3b2; } #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; } #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; } #ru-bulk .ru-pr-status { flex: 0 0 auto; color: #7f8b9c; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }`);
+GM_addStyle(`
+/* Встроенный блок над таблицей глав. Цвета берутся у сайта: у Rulate тёмная
+   тема — это класс dark-theme на html и body плюс набор переменных
+   --dark-*; светлая — его отсутствие. Своих значений не задаём, поэтому
+   панель меняет цвет вместе со страницей, а не спорит с ней. */
+#ru-bulk, #ru-bulk * { box-sizing: border-box !important; }
+#ru-bulk {
+  display: none; margin: 10px 0; padding: 0;
+  border: 1px solid #ddd; border-radius: 6px; overflow: hidden;
+  background: #fff; color: #333;
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
+  text-align: left !important;
+}
+html.dark-theme #ru-bulk, body.dark-theme #ru-bulk {
+  background: var(--dark-bg-card, #2a2a2a);
+  color: var(--dark-text-primary, #e0e0e0);
+  border-color: var(--dark-border-primary, #404040);
+}
+#ru-bulk.ru-open { display: flex; flex-direction: column; }
+/* Высота ограничена, прокрутка внутри тела: на книге в 600 глав таблица
+   плана иначе растянула бы страницу на десятки экранов. */
+#ru-bulk { max-height: min(70vh, 720px); }
+
+#ru-bulk .ru-hd {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid #ddd;
+  background: #f5f5f5; font-weight: 600;
+}
+html.dark-theme #ru-bulk .ru-hd, body.dark-theme #ru-bulk .ru-hd {
+  background: var(--dark-bg-secondary, #2d2d2d);
+  border-bottom-color: var(--dark-border-primary, #404040);
+}
+#ru-bulk .ru-hd b { font-size: 13px; font-weight: 600; }
+#ru-bulk .ru-hd .ru-ver { font-weight: 400; color: #888; font-size: 11.5px; }
+html.dark-theme #ru-bulk .ru-hd .ru-ver, body.dark-theme #ru-bulk .ru-hd .ru-ver { color: var(--dark-text-muted, #888); }
+
+#ru-bulk .ru-bd {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  padding: 10px 12px; display: flex; flex-direction: column;
+}
+#ru-bulk .ru-bd > * { flex: 0 0 auto; }
+
+#ru-bulk button {
+  background: #e9e9e9; color: #333; border: 1px solid #ccc; border-radius: 4px;
+  padding: 5px 11px; cursor: pointer; margin: 0 !important; font: inherit !important;
+  user-select: none; white-space: nowrap; line-height: 1.35;
+}
+#ru-bulk button:hover:not(:disabled) { background: #ddd; }
+#ru-bulk button.ru-go { background: #2e9e5b; border-color: #27864c; color: #fff; }
+#ru-bulk button.ru-go:hover:not(:disabled) { background: #27864c; }
+#ru-bulk button:disabled { opacity: .5; cursor: not-allowed; }
+html.dark-theme #ru-bulk button, body.dark-theme #ru-bulk button {
+  background: var(--dark-bg-tertiary, #3a3a3a); color: var(--dark-text-primary, #e0e0e0);
+  border-color: var(--dark-border-secondary, #555);
+}
+html.dark-theme #ru-bulk button:hover:not(:disabled), body.dark-theme #ru-bulk button:hover:not(:disabled) { background: var(--dark-bg-hover, #404040); }
+html.dark-theme #ru-bulk button.ru-go, body.dark-theme #ru-bulk button.ru-go { background: #2e9e5b; border-color: #27864c; color: #fff; }
+
+#ru-bulk .ru-log-box {
+  flex: 1 1 auto; min-height: 90px; overflow: auto !important;
+  background: #fafafa; border: 1px solid #ddd; border-radius: 4px;
+  padding: 7px !important; margin: 8px 0 0 0 !important;
+  font: 11.5px/1.45 ui-monospace, Menlo, Consolas, monospace !important;
+  white-space: pre-wrap !important; word-break: break-word !important;
+}
+html.dark-theme #ru-bulk .ru-log-box, body.dark-theme #ru-bulk .ru-log-box {
+  background: var(--dark-bg-primary, #1a1a1a); border-color: var(--dark-border-light, #333);
+}
+#ru-bulk .ru-log-box span { margin: 0 !important; padding: 0 !important; display: inline; }
+
+#ru-bulk .ru-bar { height: 6px; background: #e0e0e0; border-radius: 3px; margin: 8px 0 0 0; overflow: hidden; }
+html.dark-theme #ru-bulk .ru-bar, body.dark-theme #ru-bulk .ru-bar { background: var(--dark-bg-tertiary, #3a3a3a); }
+#ru-bulk .ru-bar > i { display: block; height: 100%; width: 0; background: #37c46a; transition: width .2s; }
+#ru-bulk .ru-prog { margin: 4px 0 0 0 !important; }
+#ru-bulk .ru-prog #ru-prog-txt { font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace; color: #777; }
+html.dark-theme #ru-bulk .ru-prog #ru-prog-txt, body.dark-theme #ru-bulk .ru-prog #ru-prog-txt { color: var(--dark-text-muted, #888); }
+
+#ru-bulk .ru-row { display: flex; gap: 6px 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 0 0 !important; padding: 0 !important; }
+#ru-bulk .ru-row:first-child { margin-top: 0 !important; }
+#ru-bulk .ru-ok { color: #1e7e45 !important; }
+#ru-bulk .ru-err { color: #c0392b !important; }
+#ru-bulk .ru-warn { color: #a57300 !important; }
+#ru-bulk .ru-plain { color: #777 !important; }
+html.dark-theme #ru-bulk .ru-ok, body.dark-theme #ru-bulk .ru-ok { color: #7fe39a !important; }
+html.dark-theme #ru-bulk .ru-err, body.dark-theme #ru-bulk .ru-err { color: #ff8585 !important; }
+html.dark-theme #ru-bulk .ru-warn, body.dark-theme #ru-bulk .ru-warn { color: #ffd166 !important; }
+html.dark-theme #ru-bulk .ru-plain, body.dark-theme #ru-bulk .ru-plain { color: var(--dark-text-muted, #888) !important; }
+
+#ru-bulk label { display: inline-flex; gap: 5px; align-items: center; user-select: none; cursor: pointer; white-space: nowrap; margin: 0 !important; font-weight: normal !important; }
+#ru-bulk input[type=number], #ru-bulk input[type=text] {
+  width: 72px; background: #fff; color: #333; border: 1px solid #ccc; border-radius: 4px;
+  padding: 4px 6px; font: inherit !important; margin: 0 !important; outline: none;
+}
+#ru-bulk input[type=text].ru-wide { width: 140px; }
+#ru-bulk select { background: #fff; color: #333; border: 1px solid #ccc; border-radius: 4px; padding: 4px 6px; font: inherit !important; margin: 0 !important; }
+html.dark-theme #ru-bulk input[type=number], body.dark-theme #ru-bulk input[type=number],
+html.dark-theme #ru-bulk input[type=text], body.dark-theme #ru-bulk input[type=text],
+html.dark-theme #ru-bulk select, body.dark-theme #ru-bulk select {
+  background: var(--dark-bg-primary, #1a1a1a); color: var(--dark-text-primary, #e0e0e0);
+  border-color: var(--dark-border-secondary, #555);
+}
+#ru-bulk input[type=checkbox] { margin: 0 !important; }
+#ru-bulk .ru-muted { color: #777; }
+html.dark-theme #ru-bulk .ru-muted, body.dark-theme #ru-bulk .ru-muted { color: var(--dark-text-muted, #888); }
+#ru-bulk .ru-sep { border-top: 1px solid #e5e5e5; margin: 10px 0 !important; padding: 0 !important; }
+html.dark-theme #ru-bulk .ru-sep, body.dark-theme #ru-bulk .ru-sep { border-top-color: var(--dark-border-light, #333); }
+
+/* Таблица плана видна всегда: отдельной кнопки «План» нет, план и есть работа. */
+#ru-bulk .ru-plan-box { margin: 0 !important; }
+#ru-bulk .ru-plan-title { margin: 0 !important; }
+#ru-bulk .ru-plan-title b { font-weight: 600; }
+#ru-bulk .ru-plan-hd { gap: 8px; }
+#ru-bulk .ru-plan-list {
+  /* Прокрутка своя и невысокая: план — это список на сотни строк, и тянуть
+     его на всю страницу незачем, когда рядом таблица глав сайта. */
+  max-height: min(42vh, 420px); overflow: auto;
+  background: #fff; border: 1px solid #ddd; border-radius: 4px;
+  margin: 6px 0 0 0 !important;
+  font: 11.5px/1.4 ui-monospace, Menlo, Consolas, monospace !important;
+}
+html.dark-theme #ru-bulk .ru-plan-list, body.dark-theme #ru-bulk .ru-plan-list {
+  background: var(--dark-bg-primary, #1a1a1a); border-color: var(--dark-border-light, #333);
+}
+#ru-bulk .ru-plan-row { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; padding: 4px 6px; border-bottom: 1px solid #eee; }
+html.dark-theme #ru-bulk .ru-plan-row, body.dark-theme #ru-bulk .ru-plan-row { border-bottom-color: #262626; }
+#ru-bulk .ru-plan-row:last-child { border-bottom: 0; }
+#ru-bulk .ru-plan-row.ru-pr-out { opacity: .5; }
+#ru-bulk .ru-plan-row.ru-pr-issue { background: #fff8e1; }
+#ru-bulk .ru-plan-row.ru-pr-none { background: #fdeaea; }
+#ru-bulk .ru-plan-row.ru-pr-manual { background: #e8f4fb; }
+html.dark-theme #ru-bulk .ru-plan-row.ru-pr-issue, body.dark-theme #ru-bulk .ru-plan-row.ru-pr-issue { background: #2a2113; }
+html.dark-theme #ru-bulk .ru-plan-row.ru-pr-none, body.dark-theme #ru-bulk .ru-plan-row.ru-pr-none { background: #2a1717; }
+html.dark-theme #ru-bulk .ru-plan-row.ru-pr-manual, body.dark-theme #ru-bulk .ru-plan-row.ru-pr-manual { background: #12242a; }
+#ru-bulk .ru-pr-num { flex: 0 0 42px; color: #777; text-align: right; }
+#ru-bulk .ru-pr-title { flex: 1 1 44%; min-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ru-bulk .ru-pr-arrow { flex: 0 0 auto; color: #999; }
+#ru-bulk .ru-pr-tgt { flex: 1 1 38%; min-width: 130px; max-width: 100%; display: flex; flex-direction: column; gap: 2px; }
+#ru-bulk .ru-pr-tgt select { width: 100%; }
+#ru-bulk .ru-pr-chrf { flex: 0 0 46px; text-align: right; color: #777; }
+#ru-bulk .ru-pr-chrf.ru-bad { color: #c0392b; }
+#ru-bulk .ru-pr-chrf.ru-good { color: #1e7e45; }
+html.dark-theme #ru-bulk .ru-pr-chrf.ru-bad, body.dark-theme #ru-bulk .ru-pr-chrf.ru-bad { color: #ff8585; }
+html.dark-theme #ru-bulk .ru-pr-chrf.ru-good, body.dark-theme #ru-bulk .ru-pr-chrf.ru-good { color: #7fe39a; }
+#ru-bulk .ru-pr-status { flex: 0 0 auto; color: #888; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Мобильный: строки плана в две колонки, поля на всю ширину, кнопки крупнее
+   (палец точнее мыши не попадает). Название и номер в одну строку. */
+@media (max-width: 640px) {
+  #ru-bulk { max-height: none; }
+  #ru-bulk .ru-hd { padding: 8px 10px; }
+  #ru-bulk .ru-bd { padding: 10px; }
+  #ru-bulk .ru-plan-list { max-height: 50vh; }
+  #ru-bulk .ru-plan-row { gap: 4px; }
+  /* Галочка, название и номер в одну строку: чекбокс сам по себе занимал
+     строку и выглядел отдельным списком. */
+  #ru-bulk .ru-pr-title { flex: 1 1 auto; order: 1; }
+  #ru-bulk .ru-pr-num { order: 2; flex: 0 0 auto; }
+  #ru-bulk .ru-plan-row > input[type=checkbox] { order: 0; }
+  #ru-bulk .ru-pr-arrow { display: none; }
+  #ru-bulk .ru-pr-tgt { order: 3; flex: 1 1 100%; }
+  #ru-bulk .ru-pr-chrf { order: 4; flex: 0 0 auto; }
+  #ru-bulk .ru-row > input[type=text], #ru-bulk .ru-row > input[type=number] { width: 84px; }
+  #ru-bulk .ru-row > select { flex: 1 1 100%; }
+  #ru-bulk button { padding: 8px 12px; }
+}
+`)
+
+/* Кнопка встаёт в блок действий над таблицей глав — туда, где сайт сам
+   держит «Выбрать диапазон» и «выделить все главы». Это не отдельное окно
+   поверх страницы: человек работает с главами, и панель должна быть на том
+   же месте, что и они. Нет такого блока (другая разметка, мобильная
+   версия) — остаётся тело страницы, панель всё равно доступна. */
+function findChapterAnchor() {
+  const table = document.querySelector('#Chapters');
+  const box = (table && table.closest('.for_table_container')) || null;
+  /* Перед самой таблицей: между переключателем страниц и списком глав. */
+  return { table, box };
+}
 
 const panel = document.createElement('div');
 panel.id = 'ru-bulk';
 /* Разметку панели разбирает DOMParser, а не innerHTML: подстановка шаблона в
    innerHTML — это путь для HTML, а нужен ровно разобранный DOM (и статические
    значения CFG здесь единственные данные, но правило одно на весь файл). */
-const panelMarkup = `<div class="ru-hd"> <b>RL · обновление глав v${APP_VERSION}</b> <div class="ru-hd-btns"> <button class="ru-sec" id="ru-min" title="Свернуть">—</button> <button class="ru-sec" id="ru-close" title="Закрыть">✕</button> </div> </div> <div class="ru-bd"> <div class="ru-row"> <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none"> <button id="ru-pick">Выбрать .txt</button> <button id="ru-dry" class="ru-sec" disabled>dry-run</button> <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Главы, разбитые на сайте на несколько фрагментов, пропускаются: один текст файла не делится на них один-к-одному">Старт</button> <button id="ru-stop" class="ru-sec" disabled>Стоп</button> <button id="ru-log-dl" class="ru-sec">Лог</button> <button id="ru-plan" class="ru-sec" disabled title="Показать сопоставление глав файла с главами сайта — с правкой вручную">План</button> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Глав:</span> <b id="ru-count">0</b> <span class="ru-muted" style="margin-left:8px">Диапазон:</span> <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все"> <span class="ru-muted" id="ru-range-hint"></span> </div> <div class="ru-plan-box" id="ru-plan-box" style="display:none"> <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет</b></div> <div class="ru-row ru-plan-hd"> <span class="ru-muted">Показывать:</span> <select id="ru-plan-filter" title="Какие строки видны в таблице"><option value="all">Все</option><option value="issues">Только спорные</option></select> <button class="ru-sec" id="ru-plan-check" title="Прочитать выделенные строки и сверить текст по chrF">Проверить выбранные (chrF)</button> <button class="ru-sec" id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button> </div> <div class="ru-plan-list" id="ru-plan-list"></div> </div> <div class="ru-sep"></div> <div class="ru-row"> <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100"> <span class="ru-muted" style="margin-left:6px">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50"> <span class="ru-muted" style="margin-left:6px" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span> <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 или пусто — сверка выключена."> </div> <div class="ru-row"> <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label> <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label> </div> <div class="ru-row"> <span class="ru-muted">Названия глав:</span> <select id="ru-title-mode"> <option value="off">Не обновлять</option> <option value="title-only">Обновлять названия</option> <option value="title-and-body">Обновлять названия + текст</option> </select> </div> <div class="ru-bar"><i id="ru-bar-fill"></i></div><div class="ru-row ru-prog"><span class="ru-muted" id="ru-prog-txt">0 из 0 (0%)</span></div> <div class="ru-log-box" id="ru-log"></div> </div> <div class="ru-grip ru-grip-nw" id="ru-grip-nw" title="Потяните за угол: размер и положение"></div> <div class="ru-grip" id="ru-grip" title="Потяните, чтобы изменить размер панели"></div>`;
+const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <span class="ru-ver">v${APP_VERSION}</span> </div>
+<div class="ru-bd">
+  <div class="ru-row">
+    <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none">
+    <button id="ru-pick">Выбрать .txt</button>
+    <button id="ru-dry" disabled>dry-run</button>
+    <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Главы, разбитые на сайте на несколько фрагментов, пропускаются: один текст файла не делится на них один-к-одному">Старт</button>
+    <button id="ru-stop" disabled>Стоп</button>
+    <button id="ru-log-dl" title="Скачать лог в файл rulate-bulk-log.txt">Скачать лог</button>
+  </div>
+  <div class="ru-row">
+    <span class="ru-muted">Глав:</span> <b id="ru-count">0</b>
+    <span class="ru-muted">Диапазон:</span>
+    <input id="ru-range" type="text" class="ru-wide" placeholder="1-50, 55" title="Диапазон: 1-50, 55, 60-70. Пусто = все">
+    <span class="ru-muted" id="ru-range-hint"></span>
+  </div>
+  <div class="ru-sep"></div>
+  <div class="ru-plan-box" id="ru-plan-box">
+    <div class="ru-row ru-plan-title"><b id="ru-plan-stat">Плана нет — выберите .txt</b></div>
+    <div class="ru-row ru-plan-hd">
+      <span class="ru-muted">Показывать:</span>
+      <select id="ru-plan-filter" title="Какие строки видны в таблице"><option value="all">Все</option><option value="issues">Только спорные</option></select>
+      <button id="ru-plan-check" title="Прочитать выделенные строки и сверить текст по chrF">Проверить выбранные (chrF)</button>
+      <button id="ru-plan-reset" title="Снять ручные правки с выделенных строк и вернуть решение скрипта">Сбросить</button>
+    </div>
+    <div class="ru-plan-list" id="ru-plan-list"></div>
+  </div>
+  <div class="ru-sep"></div>
+  <div class="ru-row">
+    <span class="ru-muted">Пауза (мс):</span> <input id="ru-delay" type="number" value="${CFG.delayMs}" min="100" step="100">
+    <span class="ru-muted">Рандом ±:</span> <input id="ru-jitter" type="number" value="${CFG.jitterMs}" min="0" step="50">
+    <span class="ru-muted" title="Порог сверки главы с уже сохранённым переводом на сайте: 0.75 — обычный, 0 — сверка выключена">chrF:</span>
+    <input id="ru-chrf" type="number" value="${CFG.minChrf}" min="0" max="1" step="0.05" title="Порог сверки главы с уже сохранённым переводом на сайте. 1 — тексты обязаны совпасть почти дословно, 0.75 — обычный порог (мелкие правки проходят, чужая глава нет), 0 или пусто — сверка выключена.">
+  </div>
+  <div class="ru-row">
+    <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label>
+    <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label>
+  </div>
+  <div class="ru-row">
+    <span class="ru-muted">Названия глав:</span>
+    <select id="ru-title-mode">
+      <option value="off">Не обновлять</option>
+      <option value="title-only">Обновлять названия</option>
+      <option value="title-and-body">Обновлять названия + текст</option>
+    </select>
+  </div>
+  <div class="ru-bar"><i id="ru-bar-fill"></i></div>
+  <div class="ru-row ru-prog"><span class="ru-muted" id="ru-prog-txt">0 из 0 (0%)</span></div>
+  <div class="ru-log-box" id="ru-log"></div>
+</div>`;
 {
   const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
   for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
 }
 
-document.body.appendChild(panel);
+/* Кнопка-переключатель в стиле сайта (btn btn-default — тот же класс, что у
+   «Выбрать диапазон» рядом). Второе нажатие прячет панель. */
+const toggleBtn = document.createElement('button');
+toggleBtn.type = 'button';
+toggleBtn.id = 'ru-toggle';
+toggleBtn.className = 'btn btn-default';
+toggleBtn.textContent = 'Обновление глав';
+toggleBtn.setAttribute('aria-expanded', 'false');
+toggleBtn.setAttribute('aria-controls', 'ru-bulk');
+
+{
+  const { table, box } = findChapterAnchor();
+  if (table && table.parentNode) {
+    /* Кнопка и панель — прямо перед таблицей глав, внутри того же
+       контейнера: иначе ширина панели окажется уже или шире таблицы.
+       Кнопка вставляется первой, поэтому при открытии панели она остаётся
+       на своём месте сверху, а не прыгает под неё. */
+    table.parentNode.insertBefore(toggleBtn, table);
+    table.parentNode.insertBefore(panel, table);
+  } else {
+    /* Оглавления нет — страница не книга или разметка сменилась: панель
+       остаётся сверху, чтобы до неё было чем дойти. */
+    const host = document.querySelector('.for_table_container') || document.body;
+    if (box && box.parentNode) box.parentNode.insertBefore(toggleBtn, box);
+    else host.insertBefore(toggleBtn, host.firstChild);
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'max-width:100%;margin:10px 0;';
+    wrap.appendChild(panel);
+    if (toggleBtn.parentNode) toggleBtn.parentNode.insertBefore(wrap, toggleBtn.nextSibling);
+    else document.body.insertBefore(wrap, document.body.firstChild);
+  }
+}
 
 const $ = (id) => panel.querySelector('#' + id);
 const logEl = $('ru-log');
@@ -1173,8 +1431,7 @@ function updateFoot(shownCount) {
 function renderPlan() {
   const box = $('ru-plan-box');
   const list = $('ru-plan-list');
-  if (!plan || !planState.open) { box.style.display = 'none'; return; }
-  box.style.display = '';
+  if (!plan) return;
 
   const onlyIssues = $('ru-plan-filter').value === 'issues';
   const rangeSet = plan.rangeSet || null;
@@ -1318,7 +1575,6 @@ async function refreshPlan() {
   if (!parsed.length) { log('Сначала выберите .txt', 'warn'); return null; }
   const bookId = bookIdFromUrl();
   if (!bookId) { log('Не определён id книги из URL.', 'err'); return null; }
-  $('ru-plan').disabled = true;
   try {
     site = await buildSiteMap(bookId);
     logSiteReport(site, ui);
@@ -1336,7 +1592,6 @@ async function refreshPlan() {
     log('Ошибка чтения оглавления: ' + e.message, 'err');
     return null;
   } finally {
-    $('ru-plan').disabled = false;
   }
 }
 
@@ -1352,6 +1607,7 @@ async function checkRows() {
   if (!targets.length) { log('Нечего проверять: спорных строк нет. Выделите строки в панели.', 'warn'); return; }
   log(`=== ПРОВЕРКА ${targets.length} строк (chrF) ===`, 'ok');
   aborted = false;
+  running = true;
   $('ru-start').disabled = $('ru-dry').disabled = true;
   $('ru-stop').disabled = false;
 
@@ -1392,14 +1648,6 @@ async function checkRows() {
 }
 
 /* ---------- события таблицы ---------- */
-/* «План» — переключатель: первое нажатие строит план, второе его прячет.
-   Повторная сборка не нужна ни при скрытии, ни при показе — оглавление уже
-   прочитано, а ручные правки живут в самом плане. */
-$('ru-plan').onclick = () => {
-  if (plan && planState.open) { planState.open = false; renderPlan(); return; }
-  planState.open = true;
-  if (!plan) refreshPlan(); else renderPlan();
-};
 $('ru-plan-filter').onchange = () => { touched = new Set(); renderPlan(); };
 $('ru-plan-check').onclick = () => checkRows();
 $('ru-plan-reset').onclick = () => {
@@ -1409,145 +1657,35 @@ $('ru-plan-reset').onclick = () => {
   renderPlan();
 };
 
-/* ---------- панель: перетаскивание, размер и память панели ---------- */
-/* Размер и положение — предпочтения УСТРОЙСТВА, а не книги: панель
-   раскрывают под свой экран, и на узком ноутбуке она не должна открываться
-   в размере монитора. Ключ один на устройство, не по книгам. */
-const UI_KEY = 'rlUi';
+/* ---------- переключатель панели ---------- */
+/* Панель — часть страницы, а не окно поверх неё: она появляется над
+   таблицей глав по кнопке и уходит по повторному нажатию. Пока прогон идёт,
+   кнопка не закрывает панель — иначе случайное нажатие спрячет прогресс
+   и остановить будет нечем (прогон при этом продолжался бы). */
+function panelOpen() { return panel.classList.contains('ru-open'); }
 
-function readUi() {
-  try { const raw = localStorage.getItem(UI_KEY); return raw ? JSON.parse(raw) : {}; } catch (e) { return {}; }
+function setPanelOpen(open) {
+  panel.classList.toggle('ru-open', open);
+  toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  toggleBtn.classList.toggle('active', open);
+  if (open) {
+    /* План строится сразу: отдельной кнопки «План» нет, показывать
+       пользователю «Плана нет — нажмите ещё что-то» значит требовать
+       лишнего шага. Оглавление читается один раз и запоминается. */
+    if (parsed.length && !plan) refreshPlan();
+    else if (plan) renderPlan();
+  }
 }
 
-/* Размер возвращается в границы экрана: окно вчера могло быть шире.
-   Минимум — чтобы в панели жили кнопки и таблица, максимум — вьюпорт. */
-const UI_MIN_W = 420, UI_MIN_H = 240;
-
-function clampPanel(box) {
-  const vw = window.innerWidth, vh = window.innerHeight;
-  /* На узком экране минимум не может быть больше экрана: иначе панель шире
-     окна, и до её правого края (с кнопками) не добраться ничем. */
-  const minW = Math.min(UI_MIN_W, vw - 8);
-  const minH = Math.min(UI_MIN_H, vh - 8);
-  const w = Math.max(minW, Math.min(vw - 8, box.w || 0));
-  const h = Math.max(minH, Math.min(vh - 8, box.h || 0));
-  return { w: Math.round(w), h: Math.round(h) };
-}
-
-function applyUi() {
-  const saved = readUi();
-  const size = clampPanel(saved.size || { w: panel.offsetWidth, h: panel.offsetHeight });
-  panel.style.width = size.w + 'px';
-  /* Свёрнутая панель — одна шапка: высоту ей задаёт содержимое, иначе под
-     шапкой осталось бы пустое поле — ровно то, что сворачивали. */
-  panel.style.height = panel.classList.contains('ru-min') ? '' : size.h + 'px';
-  /* Положение хранится только если панель утащили от угла: по умолчанию
-     она прижата вправо-вниз и сама переживает смену размера окна. */
-  if (!saved.pos) return;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const x = Math.max(0, Math.min(vw - size.w, saved.pos.x));
-  const y = Math.max(0, Math.min(vh - size.h, saved.pos.y));
-  panel.style.left = x + 'px';
-  panel.style.top = y + 'px';
-  panel.style.right = 'auto'; panel.style.bottom = 'auto';
-}
-
-function saveUi(patch) {
-  try { localStorage.setItem(UI_KEY, JSON.stringify(Object.assign(readUi(), patch))); } catch (e) { /* хранилище переполнено — не повод падать */ }
-}
-
-applyUi();
-
-/* Окно уменьшили — панель поджимается за ним, а не остаётся вчерашних
-   размеров за краем: обработчик только читает, запись делает человек. */
-window.addEventListener('resize', () => {
-  if (!readUi().size && !readUi().pos) return;
-  applyUi();
-});
-
-/* Перетаскивание за заголовок и изменение размера за любой из двух углов —
-   одним указателем: pointermove работает и мышью, и на тач-экране, а
-   setPointerCapture не даёт событию потеряться за пределами панели.
-
-   Углы считаются по-разному: правый-нижний только меняет размер, а
-   левый-верхний меняет его от НЕПОДВИЖНОГО правого-нижнего угла — вместе
-   с размером едет и положение. Иначе панель росла бы вбок от курсора,
-   а тянули бы мы за другой её край. */
-(function makeMovable() {
-  const handle = panel.querySelector('.ru-hd');
-  const grips = [
-    { el: panel.querySelector('#ru-grip'), mode: 'resize' },
-    { el: panel.querySelector('#ru-grip-nw'), mode: 'resize-nw' },
-  ];
-  let mode = '', sx = 0, sy = 0, ow = 0, oh = 0, ol = 0, ot = 0;
-
-  const start = (e, m) => {
-    /* Кнопки в шапке нажимаются, а не тащат панель. Ручка угла живёт в
-       шапке (левый верхний): нажатие на неё — это ресайз, а не перетаскивание. */
-    if (e.target.tagName === 'BUTTON') return;
-    if (m === 'drag' && e.target.classList.contains('ru-grip')) return;
-    mode = m;
-    sx = e.clientX; sy = e.clientY;
-    const r = panel.getBoundingClientRect();
-    ow = r.width; oh = r.height; ol = r.left; ot = r.top;
-    panel.style.right = 'auto'; panel.style.bottom = 'auto';
-    panel.style.left = ol + 'px'; panel.style.top = ot + 'px';
-    try { panel.setPointerCapture(e.pointerId); } catch (_) { /* вне окна событие всё равно приходит на панель */ }
-    e.preventDefault();
-  };
-
-  const move = (e) => {
-    if (!mode) return;
-    if (mode === 'drag') {
-      const nx = Math.max(0, Math.min(window.innerWidth - 80, ol + (e.clientX - sx)));
-      const ny = Math.max(0, Math.min(window.innerHeight - 40, ot + (e.clientY - sy)));
-      panel.style.left = nx + 'px'; panel.style.top = ny + 'px';
-      return;
-    }
-    if (mode === 'resize-nw') {
-      /* Правый-нижний угол стоит на месте: размер — это расстояние до него,
-         а положение — где курсор. Тянуть за левый край можно только пока
-         панель не упрётся в свой минимум — дальше край «залипает». */
-      const size = clampPanel({ w: ol + ow - e.clientX, h: ot + oh - e.clientY });
-      const nx = Math.max(0, ol + ow - size.w);
-      const ny = Math.max(0, ot + oh - size.h);
-      panel.style.width = size.w + 'px';
-      panel.style.height = size.h + 'px';
-      panel.style.left = nx + 'px';
-      panel.style.top = ny + 'px';
-      return;
-    }
-    const size = clampPanel({ w: ow + (e.clientX - sx), h: oh + (e.clientY - sy) });
-    panel.style.width = size.w + 'px';
-    panel.style.height = size.h + 'px';
-  };
-
-  const stop = () => {
-    if (!mode) return;
-    const resized = mode !== 'drag';
-    mode = '';
-    const r = panel.getBoundingClientRect();
-    const patch = { pos: { x: Math.round(r.left), y: Math.round(r.top) } };
-    if (resized) patch.size = { w: Math.round(r.width), h: Math.round(r.height) };
-    saveUi(patch);
-  };
-
-  handle.addEventListener('pointerdown', (e) => start(e, 'drag'));
-  for (const g of grips) g.el.addEventListener('pointerdown', (e) => start(e, g.mode));
-  panel.addEventListener('pointermove', move);
-  panel.addEventListener('pointerup', stop);
-  panel.addEventListener('pointercancel', stop);
-})();
-
-$('ru-min').onclick = () => {
-  const b = panel.querySelector('.ru-bd');
-  const hidden = b.style.display === 'none';
-  b.style.display = hidden ? '' : 'none';
-  panel.classList.toggle('ru-min', !hidden);
-  $('ru-min').textContent = hidden ? '—' : '▢';
-  applyUi();
+toggleBtn.onclick = () => {
+  if (panelOpen()) {
+    if (running) { log('Идёт заливка: панель не закрывается, пока не нажмёте «Стоп».', 'warn'); return; }
+    setPanelOpen(false);
+    return;
+  }
+  setPanelOpen(true);
 };
-$('ru-close').onclick = () => { aborted = true; panel.remove(); };
+
 $('ru-pick').onclick = () => $('ru-file').click();
 $('ru-log-dl').onclick = () => {
   const a = document.createElement('a');
@@ -1583,16 +1721,18 @@ $('ru-file').addEventListener('change', (e) => {
     const problems = parsed.filter(c => c.problem);
     const valid = parsed.filter(c => !c.problem);
     $('ru-count').textContent = valid.length;
-    $('ru-plan').disabled = valid.length === 0;
     $('ru-start').disabled = $('ru-dry').disabled = valid.length === 0;
     plan = null;
     site = null;
     selected = new Set();
     reports = new Map();
     $('ru-plan-filter').value = 'all';
-    planState.open = false;
     renderPlan();
     log(`Файл «${f.name}»: глав ${parsed.length} (валидных ${valid.length}).`, valid.length ? 'ok' : 'err');
+    /* План строится сразу: кнопки «План» больше нет, и человек не должен
+       догадываться, что для сопоставления нужен ещё один шаг. Оглавление
+       читается один раз — при повторном «Плане» оно берётся из памяти. */
+    if (valid.length) refreshPlan();
     if (problems.length) {
       log(`⚠ Проблемных в файле: ${problems.length} (будут пропущены)`, 'warn');
       problems.forEach(c => log(`   · «${c.title}» — ${c.problem}`, 'warn'));
@@ -1636,6 +1776,7 @@ async function launch(dryRun) {
   const onlyFi = null;
   if (selected.size) log(`Выделено ${selected.size} строк (для «Проверить»); заливка идёт по всему плану.`, 'plain');
 
+  running = true;
   $('ru-start').disabled = $('ru-dry').disabled = true;
   $('ru-stop').disabled = false;
   log(`=== ${dryRun ? 'DRY-RUN' : 'ЗАПУСК'} ===`, 'ok');
@@ -1647,6 +1788,7 @@ async function launch(dryRun) {
       renderPlan();
     }
   } finally {
+    running = false;
     $('ru-start').disabled = $('ru-dry').disabled = parsed.length === 0;
     $('ru-stop').disabled = true;
   }
@@ -1655,4 +1797,4 @@ async function launch(dryRun) {
 $('ru-dry').onclick = () => launch(true);
 $('ru-start').onclick = () => launch(false);
 
-log('Готово. Панель перетаскивается. Выберите .txt.', 'ok');
+log('Готово. Выберите .txt — план построится сам.', 'ok');

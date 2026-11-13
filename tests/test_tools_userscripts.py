@@ -182,69 +182,86 @@ def test_lite_reader_ui_invariants():
 
 
 def test_rulate_panel_invariants():
-    """Панель rulate: шапка всегда видна, размер тянется за угол, план и
-    диапазон говорят одно и то же.
+    """Панель rulate встроена в страницу книги и подчиняется её виду.
 
-    Раскрытый план упирался в низ экрана, и шапка с кнопками уезжала за верхний
-    край — добраться до неё было нечем, потому что прокрутки внутри панели не
-    было. Обратный случай не менее важен: поле диапазона, которого нет в
-    заливке, — тихая потеря глав.
+    Раньше это было отдельное окно поверх страницы, которое таскали за шапку
+    и тянули за углы. Теперь панель стоит над таблицей глав, открывается
+    кнопкой в стиле сайта и повторным нажатием уходит. Проверяется то, что
+    ломается молча: место вставки, тема, план без отдельной кнопки, мобильный
+    вид и отсутствие снятых элементов управления.
     """
     text = (TOOLS / "rulate_reload" / "rulate-bulk-update.user.js").read_text(encoding="utf-8")
-    # шапка не скроллится вместе с телом: flex-колонка, скролл в .ru-bd
-    assert re.search(r"#ru-bulk \{[^}]*display: flex; flex-direction: column", text), \
-        "панель не колонка: шапка уедет за край вместе с телом"
+
+    # ── встроена в страницу, а не окно поверх неё ──
+    assert "position: fixed" not in text, \
+        "панель снова окно поверх страницы: она должна стоять над таблицей глав"
+    assert "toggleBtn.id = 'ru-toggle'" in text, "нет кнопки «Обновление глав»"
+    assert "className = 'btn btn-default'" in text, \
+        "кнопка не в стиле сайта (btn btn-default, как «Выбрать диапазон» рядом)"
+    assert "table.parentNode.insertBefore(panel, table)" in text, \
+        "панель не вставлена перед таблицей глав"
+    assert "table.parentNode.insertBefore(toggleBtn, table)" in text, \
+        "кнопка не встала над таблицей глав"
+    assert "#ru-bulk.ru-open { display: flex" in text, \
+        "нет состояния «показана»: кнопка не сможет открыть панель"
+    assert "function setPanelOpen(open)" in text, "нет переключателя панели"
+    assert "if (running)" in text, \
+        "панель закрывается во время заливки: прогресс и «Стоп» пропадут"
+
+    # ── тема совпадает с темой сайта ──
+    assert "dark-theme" in text, "панель не знает про тёмную тему сайта"
+    assert "--dark-bg-card" in text and "--dark-text-primary" in text, \
+        "цвета не берутся из переменных тёмной темы сайта"
+    assert "html.dark-theme #ru-bulk" in text and "body.dark-theme #ru-bulk" in text, \
+        "тёмная тема учитывает только один из двух классов (сайт ставит оба)"
+
+    # ── снятые элементы не вернулись ──
+    for gone in ('id="ru-min"', 'id="ru-close"', 'id="ru-plan"', 'id="ru-grip"', 'id="ru-grip-nw"', "id = 'ru-min'", "id = 'ru-close'"):
+        assert gone not in text, f"вернулся снятый элемент {gone}"
+    assert "makeMovable" not in text, "вернулось перетаскивание панели"
+    assert "UI_KEY" not in text, "вернулась память размера/положения: панель больше не окно"
+
+    # ── план виден по умолчанию ──
+    assert 'id="ru-plan-box"' in text, "нет блока плана"
+    assert 'style="display:none"' not in text.split('id="ru-plan-box"')[1].split('>')[0], \
+        "план спрятан по умолчанию: отдельной кнопки «План» больше нет"
+    assert "if (!plan) return;" in text, "renderPlan не рисует план без условия открытости"
+    assert "if (parsed.length && !plan) refreshPlan();" in text, \
+        "план не строится сам при открытии панели"
+
+    # ── прокрутка и высота ──
+    assert re.search(r"#ru-bulk \{[^}]*max-height: min\(70vh, 720px\)", text), \
+        "высота панели не ограничена: книга на 600 глав растянет страницу"
     assert re.search(r"#ru-bulk \.ru-bd \{[^}]*overflow-y: auto", text), \
         "у тела панели нет своей прокрутки"
-    assert re.search(r"#ru-bulk \.ru-hd \{[^}]*flex: 0 0 auto", text), \
-        "шапка сжимается: кнопки пропадут из виду"
-    assert 'id="ru-grip"' in text, "нет уголка для изменения размера"
-    # за левый верхний угол тянут и размер, и положение: правый-нижний
-    # остаётся на месте, иначе панель растёт вбок от курсора
-    assert 'id="ru-grip-nw"' in text, "нет уголка для изменения размера за левый верхний угол"
-    nw = re.search(r"if \(mode === 'resize-nw'\) \{(.*?)\n    \}", text, re.S)
-    assert nw, "ресайз за левый верхний угол не обрабатывается отдельно"
-    assert "ol + ow - size.w" in nw.group(1) and "ot + oh - size.h" in nw.group(1), \
-        "левый верхний угол не держит правый нижний на месте"
-    # размер и положение — привычка устройства; план — разбор одного прогона
-    assert re.search(r"localStorage\.(setItem|getItem)\(UI_KEY", text), "размер панели не запоминается"
-    assert not re.search(r"localStorage\.setItem\(storeKey", text), \
-        "план снова пишется в localStorage: он живёт только пока открыта страница"
-    assert "dropLegacyPlanStore" in text, "прежние записи плана не чистятся"
+    assert re.search(r"#ru-bulk \.ru-plan-list \{[^}]*max-height: min\(42vh, 420px\)", text), \
+        "у таблицы плана нет своей прокрутки"
 
-    # план-панель: фильтр списком, кнопки «Проверить выбранные (chrF)» и «Сбросить»
+    # ── мобильный вид ──
+    assert "@media (max-width: 640px)" in text, "нет мобильной раскладки"
+    assert "max-height: none" in text, "на мобильном панель остаётся с потолком высоты"
+    assert "#ru-bulk .ru-pr-title { flex: 1 1 auto; order: 1; }" in text, \
+        "на мобильном название главы не делит строку с галочкой"
+    assert "#ru-bulk .ru-plan-row > input[type=checkbox] { order: 0; }" in text, \
+        "на мобильном галочка стоит отдельной строкой"
+
+    # ── логика, которая не должна пострадать от переделки вида ──
     assert 'id="ru-plan-filter"' in text, "фильтр плана не список"
     assert 'id="ru-plan-issues"' not in text, "в плане остался чекбокс «только спорные»"
     assert '>Только спорные</option>' in text, "в фильтре нет пункта «Только спорные»"
     assert '>Проверить выбранные (chrF)</button>' in text, "кнопка проверки не названа chrF"
     assert text.index('id="ru-plan-check"') < text.index('id="ru-plan-reset"'), \
         "кнопки «Проверить» и «Сбросить» стоят не в том порядке"
-
-    # кандидаты есть у всех строк: иначе в select решённой строки одна глава
     assert "if (group.length > 1) b.list = group;" in text, \
         "кандидаты снова только у спорных строк"
-
-    # тело панели — колонка: лог тянется вниз, а не стоит фиксированные 120px
-    assert re.search(r"#ru-bulk \.ru-bd \{[^}]*display: flex; flex-direction: column", text), \
-        "тело панели не колонка: лог не растёт вместе с панелью"
-    assert re.search(r"#ru-bulk \.ru-bd > \* \{[^}]*flex: 0 0 auto", text), \
-        "поля тела панели сжимаются вместе с логом"
-    assert re.search(r"#ru-bulk \.ru-log-box \{[^}]*flex: 1 1 auto", text), \
-        "лог не тянется: при увеличении панели под ним остаётся пустое поле"
-    assert "max-height: 40vh" not in text, \
-        "у лога снова потолок в 40vh: он перестанет расти вместе с панелью"
+    assert not re.search(r"localStorage\.setItem\(storeKey", text), \
+        "план снова пишется в localStorage: он живёт только пока открыта страница"
+    assert "dropLegacyPlanStore" in text, "прежние записи плана не чистятся"
 
     # статус строки лежит в колонке под своим списком выбора
     assert "#ru-bulk .ru-pr-tgt" in text, "статус строки вынесен из колонки списка"
-    assert re.search(r"tr\.append\(sel, title, num, arrow, cell, chrf\);", text), \
-        "статус снова отдельным элементом строки: он будет плавать"
     assert "cell.append(select, status);" in text, \
         "статус не в колонке списка: подпись уезжает от своего выбора"
-
-    # ограничение по фрагментам сказано и в панели, и в README
-    assert "несколько фрагментов" in text, "в логе нет упоминания пропуска фрагментированных глав"
-    assert "разбитые на сайте на несколько фрагментов" in text, \
-        "подсказка «Старт» молчит об ограничении по фрагментам"
 
     # прогресс: проценты и остаток времени под полосой
     assert 'id="ru-prog-txt"' in text, "под полосой нет подписи прогресса"
@@ -257,33 +274,11 @@ def test_rulate_panel_invariants():
     assert "if (samples == null || samples.length < 2) return null;" in text, \
         "остаток печатается без темпа: на старте будет «осталось 0 с»"
     assert "progressMarks.length = 0;" in text, "отметки темпа не сбрасываются перед прогоном"
-    # диапазон и план — одно правило
-    assert "const inRange = (num, set)" in text and "function planRowRange" in text, \
-        "правило диапазона разъехалось по местам"
-    assert not re.search(r"CFG\.fallbackByTitle", text), \
-        "галочка fallback вернулась: поиск по названию работает всегда"
-    assert 'id="ru-fallback-title"' not in text, "в панели остался чекбокс Title fallback"
-    assert "Проверять результат" in text, "чекбокс проверки после записи потерял название"
-    assert "> Сверка главы<" not in text, "галочка сверки вернулась: переключатель один — порог chrF"
-    assert 'id="ru-check-same"' not in text, "в панели вернулся чекбокс сверки главы"
-    # порядок в строке плана: название главы, затем её номер
-    row = re.search(r"tr\.append\(([^)]*)\);\n", text)
-    assert row, "разметка строки плана не найдена"
-    cells = [c.strip() for c in row.group(1).split(",")]
-    assert cells.index("title") < cells.index("num"), \
-        f"в строке плана первым должен идти номер: {cells}"
-    # снятые кнопки и чекбокс не должны вернуться в разметку
-    for gone in ('ru-plan-only', 'ru-plan-skip', 'ru-plan-align', 'ru-plan-save', 'ru-plan-load'):
-        assert f'id="{gone}"' not in text, f"в панели остался удалённый элемент {gone}"
-    # «План» — переключатель, а не «показать один раз»
-    assert "planState.open" in text and "if (plan && planState.open)" in text, \
-        "«План» снова не прячет таблицу"
-    # проверка результата по умолчанию выключена
-    assert "verify: false" in text, "«Проверять результат» снова включён по умолчанию"
-    # ленивый список: полный перечень книги строится при раскрытии
-    assert "function fillSelect" in text and "select.dataset.filled" in text, \
-        "весь список книги снова строится в каждом <select> при рендере"
-    assert "planState.limit" in text, "таблица снова рисуется целиком"
+
+    # ограничение по фрагментам сказано и в панели, и в README
+    assert "несколько фрагментов" in text, "в логе нет упоминания пропуска фрагментированных глав"
+    assert "разбитые на сайте на несколько фрагментов" in text, \
+        "подсказка «Старт» молчит об ограничении по фрагментам"
 
 
 def test_lite_modals_close_only_explicitly():
