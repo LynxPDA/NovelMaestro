@@ -1990,6 +1990,19 @@
       return options.includes(v) ? v : def;
     },
 
+    /* ── пустое поле в токенах: стёртое значение — дефолт реестра ──
+     * Размер запроса в токенах пустым не значит ничего, и пустая строка в
+     * argv уехала бы ошибкой argparse. Поля с признаком noempty (реестр
+     * ставит его по метке «ТОКЕНЫ») возвращают дефолт при уходе с поля;
+     * ноль законен — «без ограничения» тоже настройка. */
+    noEmptyValue: (field, value) => {
+      if (!field || !field.noempty) return value;
+      var raw = String(value === undefined || value === null ? "" : value).trim();
+      if (raw !== "") return value;
+      return field.default === undefined || field.default === null
+        ? "0" : String(field.default);
+    },
+
     /* ── дробное значение в целочисленном поле «Настроек» ──
      * Скопированный «262,144» браузер в <input type="number"> превращает в
      * «262.144», и серверное чтение числа (core/settings._coerce) берёт целую

@@ -636,6 +636,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       // книги, иначе панель глоссария стоит пустой при живых главах
       if ((f.name === "start" || f.name === "end")
           && String(saved[f.name]).trim() === "") continue;
+      // поле в токенах пустым не бывает: память с пустым значением
+      // (стёртое поле прежней версии) не гасит дефолт реестра
+      if (f.noempty && String(saved[f.name]).trim() === "") continue;
       // исчезнувший файл не возвращается из памяти: поле остаётся пустым,
       // чтобы сработал автоподхват (autofile) и человек видел живой выбор
       const items = (pools || {})[f.name];
@@ -1061,6 +1064,18 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         vals[f.name] = input.value;
         touched.add(f.name);
       });
+      /* поле в токенах пустым не остаётся: стёртое при уходе с поля
+         возвращается к дефолту (на каждый ввод не лезем — человек стирает
+         цифру, чтобы набрать другую). В символах/главах пусто — смысл. */
+      if (f.noempty) {
+        input.addEventListener("change", () => {
+          const back = UICore.noEmptyValue(f, input.value);
+          if (back === input.value) return;
+          input.value = back;
+          vals[f.name] = back;
+          touched.add(f.name);
+        });
+      }
     }
     const wrap = h("label", { class: "field" }, label, input);
     // профиль стадии: под селектом — подпись выбранного профиля (сервер,

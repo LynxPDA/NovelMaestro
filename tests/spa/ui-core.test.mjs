@@ -1888,6 +1888,22 @@ test("numberStepHint: дробь в целочисленном поле пред
   assert.equal(UICore.numberStepHint("text", 1, "1.5"), "");
 });
 
+/* ── пустое поле в токенах: стёртое возвращается к дефолту ── */
+test("noEmptyValue: пустое поле в токенах — дефолт реестра", () => {
+  const f = { name: "chunk_size", type: "number", default: "7000", noempty: true };
+  assert.equal(UICore.noEmptyValue(f, ""), "7000");
+  assert.equal(UICore.noEmptyValue(f, "   "), "7000");
+  assert.equal(UICore.noEmptyValue(f, null), "7000");
+  assert.equal(UICore.noEmptyValue(f, "9000"), "9000");
+  // ноль — законная настройка («без ограничения» тоже значение)
+  assert.equal(UICore.noEmptyValue(f, "0"), "0");
+  // дефолт-ноль не превращается в пустоту
+  assert.equal(UICore.noEmptyValue({ default: 0, noempty: true }, ""), "0");
+  // поле в символах/главах пустым бывает: «без ограничения», «вся книга»
+  assert.equal(UICore.noEmptyValue({ default: "50" }, ""), "");
+  assert.equal(UICore.noEmptyValue(null, ""), "");
+});
+
 /* ── загрузка папки на вкладку «Файлы» ── */
 test("uploadPath: путь перетащенного файла", () => {
   assert.equal(UICore.uploadPath({ name: "a.txt" }), "a.txt");

@@ -704,9 +704,9 @@ def main() -> None:
                          "(алиасы — при включении aliases; порядок в блоке — "
                          "term, aliases, type, translation).")
     ap.add_argument("--chunk_size", type=int, default=None,
-                    help="Размер чанка перевода/полировки, ТОКЕНЫ (оценка) "
-                         "(пусто = PIPELINE_CHUNK_SIZE из .env → дефолт); "
-                         "редактура идёт главой целиком.")
+                    help="Размер чанка перевода, редактуры и полировки, "
+                         "ТОКЕНЫ (оценка); действует в любом типе работы "
+                         "(пусто = PIPELINE_CHUNK_SIZE из .env → дефолт).")
     ap.add_argument("--preview-request", dest="preview_request",
                    default=None,
                    help="ПРЕДПРОСМОТР: первый LLM-запрос действия "

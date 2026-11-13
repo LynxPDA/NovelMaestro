@@ -948,6 +948,46 @@ def test_applicable_form_does_not_touch_original(global_env):
     assert form["rag_terms"] == "x"
 
 
+@pytest.mark.parametrize("key", [s.key for s in S.SETTINGS if s.type == "number"])
+def test_noempty_only_for_token_fields(key):
+    """Пустым не бывает только поле в ТОКЕНАХ: его метка — единственный
+    источник единицы (§5), и признак берётся оттуда же."""
+    s = S.BY_KEY[key]
+    assert s.noempty is ("ТОКЕНЫ" in s.label)
+
+
+@pytest.mark.parametrize("stage,key", [
+    ("pipeline", "PIPELINE_CHUNK_SIZE"), ("ner", "NER_CHUNK_SIZE"),
+    ("ner_check", "NER_CHECK_REQUEST_BUDGET"),
+    ("translate_check_llm", "TRANSLATE_CHECK_LLM_REQUEST_BUDGET"),
+    ("epub", "EPUB_CHUNK_SIZE"), ("wiki", "WIKI_CHUNK_SIZE"),
+])
+def test_applicable_form_fills_empty_token_field(global_env, stage, key):
+    """Стёртое поле в токенах уезжает в запуск дефолтом реестра, а не пустой
+    строкой: пустая строка в argv — ошибка argparse на ровном месте."""
+    s = S.BY_KEY[key]
+    got = S.applicable_form(stage, {s.name: ""})
+    assert got[s.name] == str(s.default)
+    assert S.applicable_form(stage, {s.name: "   "})[s.name] == str(s.default)
+    assert S.applicable_form(stage, {s.name: "42"})[s.name] == "42"
+
+
+def test_applicable_form_keeps_empty_symbol_field(global_env):
+    """Пустое поле в символах/главах — законный смысл («без ограничения»),
+    и правило про токены на него не распространяется."""
+    assert S.applicable_form("compile", {"chunk_size": ""})["chunk_size"] == ""
+    assert S.applicable_form("translate_check", {
+        "tolerance_stages": ""})["tolerance_stages"] == ""
+
+
+def test_token_field_fill_keeps_number(global_env):
+    """Заполнение не трогает уже введённое число и не превращает его в текст."""
+    got = S.applicable_form("pipeline", {"action": "1", "chunk_size": None})
+    assert got["chunk_size"] == "7000"
+    got = S.applicable_form("pipeline", {"action": "1", "chunk_size": 9000})
+    assert got["chunk_size"] == 9000
+
+
 # ════════════════════════════════════════════════════════════════════
 # round-trip многострочных значений через общий .env
 # ════════════════════════════════════════════════════════════════════
