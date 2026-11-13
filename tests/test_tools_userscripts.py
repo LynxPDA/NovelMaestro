@@ -193,11 +193,7 @@ def test_rulate_panel_invariants():
     text = (TOOLS / "rulate_reload" / "rulate-bulk-update.user.js").read_text(encoding="utf-8")
 
     # ── встроена в страницу, а не окно поверх неё ──
-    # `position: fixed` допускается только у окна подтверждения свода глав:
-    # панель — часть страницы, а окно обязано висеть над ней.
-    assert "#ru-bulk {" in text
-    panel_css = text[text.index("#ru-bulk {"):text.index("#ru-confirm {")]
-    assert "position: fixed" not in panel_css, \
+    assert "position: fixed" not in text, \
         "панель снова окно поверх страницы: она должна стоять над таблицей глав"
     assert "toggleBtn.id = 'ru-toggle'" in text, "нет кнопки «Обновление глав»"
     assert "className = 'btn btn-default'" in text, \
@@ -402,53 +398,20 @@ def test_rulate_panel_invariants():
     assert text.count("setBusy(true)") == 2, \
         "предупреждение включается не во всех точках запуска (их две: проверка и заливка)"
 
-    # фрагменты: разбитая глава сводится к одному блоку
-    assert "async function removeFragmentsBulk(root, origIds)" in text, \
-        "нет удаления лишних фрагментов: глава останется разбитой"
-    # один запрос вместо запроса на каждый фрагмент
-    assert "async function removeFragmentsBulk(root, origIds)" in text, \
-        "нет массового удаления: сорок фрагментов — сорок запросов"
-    assert "function massDeleteForm(root)" in text, \
-        "форма массовых действий не ищется на странице"
-    # кнопка массового действия работает по ОТМЕЧЕННЫМ чекбоксам: скрипт
-    # обязан их отметить, иначе сайт удалит пустой набор
-    assert "box.checked = true;" in text, \
-        "чекбоксы o[] не отмечаются: массовая кнопка удалит пустой набор"
-    assert "querySelectorAll('input[type=\"checkbox\"][name=\"o[]\"]')" in text, \
-        "чекбоксы фрагментов не ищутся в форме"
-    assert "const fd = new FormData(form);" in text, \
-        "форма отправляется не целиком: без скрытых полей (CSRF) сайт её отвергнет"
-    assert "massDeleteButton(form)" in text, \
-        "кнопка удаления не находится по подписи: имя поля может смениться"
-    # удаление с конца: первый фрагмент остаётся под новый текст
-    assert "const extraIds = pairs.slice(1).map(p2 => p2.origId);" in text, \
-        "лишние фрагменты перечислены неверно: под новый текст остаётся первый"
-    # пофрагментного запасного пути быть не должно: до 60 фрагментов на
-    # главу и 2000+ глав — это десятки тысяч запросов подряд
-    assert "async function removeFragment(" not in text, \
-        "вернулось пофрагментное удаление: это спам для сервера"
-    assert "/remove`" not in text, "пофрагментный запрос удаления вернулся"
-    # согласие спрашивается до первого удаления, один раз за прогон
-    assert "function askFragments(info)" in text, "нет окна согласия на свод"
-    assert "opts.fragAnswer = answer;" in text, \
-        "ответ не запоминается: окно всплывало бы на каждой разбитой главе"
-    assert "id=\"ru-confirm-go\"" in text and "id=\"ru-confirm-skip\"" in text, \
-        "в окне нет выбора между сводом и отказом"
-    # chrF и «пропуск совпадающего» на свод не распространяются
-    assert "const savedText = merge ? null : (pairs" in text, \
-        "chrF снова сверяет разбитую главу: верная глава получит ложный отказ"
-    assert "сверка chrF пропущена" in text, \
-        "пропущенный заслон не назван в логе: читается как «проверено»"
-    # порядок записи: сначала текст, потом удаление — обрыв не оставит главу пустой
-    assert text.index("await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);") \
-        < text.index("await removeFragmentsBulk(doc, extraIds)"), \
-        "удаление идёт раньше записи: обрыв оставит главу пустой"
-    assert "Сводить фрагменты в один" in text, "нет галочки свода фрагментов"
-    assert "CFG.multiFragment = $('ru-multi-frag').checked ? 'merge' : 'skip';" in text, \
-        "выбор свода не читается при запуске"
-    # кнопка-весы честно говорит про разбитую главу, а не показывает ложный chrF
-    assert "сверка chrF здесь не показательна" in text, \
-        "кнопка-весы даёт ложный chrF на разбитой главе"
+    # многофрагментная глава пропускается: у каждого фрагмента свой tr_id,
+    # а фрагменты ещё и листаются по страницам (?Orig_page=N) — сводить их
+    # к одному блоку значит удалять необратимо и разбирать пагинацию
+    assert "фрагментов ${pairs.length} (>1): обновление не выполняется" in text, \
+        "многофрагментная глава не пропускается: запись уйдёт в первый фрагмент"
+    assert "report(row, 'несколько фрагментов')" in text, \
+        "пропуск не попадает в отчёт"
+    # раскладки по абзацам больше нет
+    assert "function splitByFragments(" not in text, "вернулась раскладка по абзацам"
+    assert "function textParagraphs(" not in text, "вернулось разбиение на абзацы"
+    assert "ru-multi-frag" not in text, "вернулась галочка раскладки по фрагментам"
+    # никакого удаления фрагментов: ни массового, ни поштучного
+    assert "massAction" not in text, "вернулось массовое удаление фрагментов"
+    assert "/remove`" not in text, "вернулось удаление фрагмента"
 
     # права на книгу: на чужой книге ни кнопки, ни панели
     assert "function canEditBook()" in text, "нет проверки прав на книгу"

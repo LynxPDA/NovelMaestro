@@ -10,10 +10,6 @@ const CFG = {
      каждой главе, а сверка chrF перед записью уже отсекает чужую главу. */
   verify: false,
   skipSame: true,
-  /* Глава, разбитая на сайте на несколько фрагментов: 'merge' — удалить
-     лишние фрагменты и залить текст одним блоком в первый, 'skip' — не
-     трогать такие главы вовсе. */
-  multiFragment: 'merge',
   diffCtx: 40,
   titleMode: 'off',
   // проверка «та ли это глава»: chrF с уже сохранённым переводом.
@@ -388,86 +384,6 @@ async function saveTranslation(bookId, chapterId, origId, trId, body, csrf) {
     { method: 'POST', credentials: 'include', body: fd });
   if (!res.ok) throw new Error('POST translate ' + res.status);
   return res;
-}
-
-/* ---------- массовое удаление фрагментов ----------
-
-   У владельца книги на её странице есть форма массовых действий
-   (`action=".../massAction"`, чекбоксы `o[]`, кнопка «Удалить фрагменты»):
-   один POST удаляет сколько угодно фрагментов. Это единственный путь,
-   которым глава из тридцати фрагментов снимается ОДНИМ запросом; удаление
-   по одному (`orig.rm`) требует запроса на каждый и на большой книге
-   превращается в тысячи обращений.
-
-   Поля формы не хардкодятся, а читаются со страницы: имя кнопки и скрытые
-   поля — часть сайта, а промах здесь необратим. Нет формы (не владелец,
-   другой шаблон страницы) — вызывающий код уходит в пофрагментное
-   удаление, которое умеет страница главы. */
-function massDeleteForm(root) {
-  for (const f of root.querySelectorAll('form')) {
-    const action = f.getAttribute('action') || '';
-    if (!/massAction/.test(action)) continue;
-    if (!massDeleteButton(f)) continue;
-    return f;
-  }
-  return null;
-}
-
-/* Кнопка удаления оригинала внутри массовой формы. Берётся по подписи, а не
-   по имени: подпись человек видит на экране, имя поля может смениться. */
-function massDeleteButton(form) {
-  const nodes = form.querySelectorAll('button, input[type="submit"], input[type="button"]');
-  for (const b of nodes) {
-    const name = b.getAttribute('name') || '';
-    if (!name) continue;
-    const label = (b.textContent || b.getAttribute('value') || '').trim();
-    if (/удалить фрагмент/i.test(label)) return { name, value: b.getAttribute('value') || '1' };
-  }
-  return null;
-}
-
-/* Удаление набора фрагментов одной операцией.
-
-   Кнопка массового удаления работает по отмеченным чекбоксам `o[]`: браузер
-   отправляет только отмеченные. Поэтому фрагменты сначала отмечаются в
-   самой форме — ровно так, как это сделал бы человек, — и снимаются одним
-   POST. Чужие отметки при этом не задеваются: после запроса каждому
-   чекбоксу возвращается прежнее состояние.
-
-   Возвращает число снятых фрагментов. Нет формы или кнопки — бросает
-   ошибку: молча пропустить удаление значило бы соврать в отчёте, что глава
-   сведена к одному блоку. */
-async function removeFragmentsBulk(root, origIds) {
-  const form = massDeleteForm(root);
-  if (!form) throw new Error('массовой формы удаления нет на странице');
-  const btn = massDeleteButton(form);
-  if (!btn) throw new Error('в массовой форме нет кнопки удаления фрагментов');
-
-  const want = new Set(origIds.map(String));
-  const boxes = [];
-  form.querySelectorAll('input[type="checkbox"][name="o[]"]').forEach((box) => {
-    if (want.has(String(box.value))) boxes.push({ box, was: box.checked });
-  });
-  /* Ни один не нашёлся — значит фрагменты этой главы перечислены не в этой
-     форме. Отправлять пустой набор нельзя: массовое действие удалило бы
-     то, что отмечено на странице сейчас. */
-  if (!boxes.length) throw new Error('фрагменты не найдены в массовой форме');
-
-  for (const b of boxes) b.box.checked = true;
-  try {
-    const fd = new FormData(form);
-    fd.append(btn.name, btn.value);
-    fd.append('ajax', '1');
-    const res = await fetch(form.getAttribute('action') || '/orig/massAction',
-      { method: 'POST', credentials: 'include', body: fd });
-    if (!res.ok) throw new Error('POST massAction ' + res.status);
-    let data = null;
-    try { data = await res.json(); } catch (e) { /* не JSON — решает статус */ }
-    if (data && data.error) throw new Error(data.error);
-    return boxes.length;
-  } finally {
-    for (const b of boxes) b.box.checked = b.was;
-  }
 }
 
 /* ---------- POST смены названия главы ---------- */
@@ -855,7 +771,7 @@ async function writePlan(plan, parsed, opts, ui) {
   const rangeReport = opts.rangeStr === undefined ? null : parseRangeReport(opts.rangeStr);
   const entries = plan.order.map(fi => planRow(plan, fi)).filter(Boolean);
   const total = entries.length;
-  const st = { saved: 0, wouldSave: 0, skipSame: 0, skipOther: 0, skipRange: 0, skipProblem: 0, fail: 0, titleChanged: 0, ambiguous: 0, fragRemoved: 0 };
+  const st = { saved: 0, wouldSave: 0, skipSame: 0, skipOther: 0, skipRange: 0, skipProblem: 0, fail: 0, titleChanged: 0, ambiguous: 0 };
   const notFoundNums = [];
   const notFoundTitles = [];
   const reports = [];
@@ -934,62 +850,34 @@ async function writePlan(plan, parsed, opts, ui) {
       const siteTitle = (html.match(/Chap\s*=\s*\{[\s\S]*?title:\s*'([^']*)'/) || [])[1] || (info.siteTitle || '');
       const pairs = readChapterIds(doc, userId);
       if (!pairs.length) { st.skipOther++; ui.log(`${tick} «${ch.title}» — нет вашего перевода.`, 'warn'); report(row, 'нет перевода'); continue; }
-      /* Глава на сайте бывает разбита на несколько фрагментов, и это
-         устаревшее хранение: старый перевод делали абзацами, новый текст
-         делится совсем иначе, поэтому ни сопоставить абзацы, ни сверить
-         текст невозможно. Такая глава сводится к одному блоку: лишние
-         фрагменты удаляются, текст целиком идёт в первый. Решение принимает
-         человек до запуска — панель показывает такие главы и спрашивает
-         согласие: удаление фрагмента необратимо. */
-      const merge = pairs.length > 1 && CFG.multiFragment === 'merge';
-      if (pairs.length > 1 && CFG.multiFragment === 'skip') {
+      /* Глава, разбитая на сайте на несколько фрагментов, НЕ обновляется.
+
+         У каждого фрагмента свой `origId` и свой `tr_id`, а фрагменты ещё и
+         листаются по страницам (`?Orig_page=N`). Свести такую главу к одному
+         блоку можно только удалением фрагментов — операция необратимая и
+         требует разбора пагинации, — а разложить текст файла по фрагментам
+         нельзя: границы деления у старого перевода свои. Поэтому глава
+         пропускается с причиной в логе: обновлять её вручную безопаснее, чем
+         угадывать. */
+      if (pairs.length > 1) {
         st.skipOther++;
-        ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length} (>1), пропуск по настройке.`, 'warn');
+        ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length} (>1): обновление не выполняется.`, 'warn');
+        ui.log('     → такая глава правится вручную: фрагменты делят текст по-своему', 'plain');
         report(row, 'несколько фрагментов');
         continue;
-      }
-      if (pairs.length > 1 && merge) {
-        if (opts.dryRun) {
-          ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length}: [DRY] удалились бы ${pairs.length - 1}, текст лёг бы в первый`, 'plain');
-        } else {
-          /* Согласие спрашивается один раз за прогон, на первой разбитой
-             главе и до первого удаления. Ответ действует до конца прогона:
-             спрашивать заново на каждой главе — значит превратить один
-             ответ в несколько случайных. */
-          const answer = opts.fragAnswer || (opts.askFragmented
-            ? await opts.askFragmented({ count: pairs.length, title: ch.title })
-            : 'skip');
-          opts.fragAnswer = answer;
-          if (answer !== 'merge') {
-            st.skipOther++;
-            ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length}, свод отключён: пропуск.`, 'warn');
-            report(row, 'несколько фрагментов');
-            continue;
-          }
-          ui.log(`${tick} «${ch.title}» — фрагментов ${pairs.length}: свожу к одному`, 'plain');
-        }
       }
 
       const { origId, trId } = pairs[0];
       ui.log(`${tick} «${ch.title}» ↔ «${siteTitle}» | chap=${info.chapterId} orig=${origId} tr=${trId} | ${ch.text.length}с`, 'plain');
 
-      /* Сверка с сохранённым и «пропуск совпадающего» держатся на том, что
-         на сайте лежит ПРЕЖНЯЯ версия ЭТОЙ главы. У разбитой главы это не
-         так: старый перевод делали абзацами по чужой разбивке, он бывает
-         плохого качества, и нумерация могла разъехаться. chrF на нём даёт
-         низкий счёт при верной главе и отказывает зря, а «совпадает» не
-         значит ничего. Обе проверки отключаются на свод, и в лог уходит
-         причина: молча пропущенный заслон читался бы как «проверено».
-
-         Глава при этом не остаётся без защиты: номер и название сверены
-         планом до записи, а после свода глава идёт обычным порядком, где
-         chrF снова работает. */
-      const savedText = merge ? null : (pairs
+      /* Сохранённый перевод читается по ВСЕМ фрагментам: при разбиении
+         сравнение с первым абзацем дало бы chrF около нуля и ложный отказ
+         «глава не та». */
+      const savedText = pairs
         .map(p2 => readSavedText(doc, p2.trId))
         .filter(t => t != null)
-        .join('\n\n') || null);
-      const same = merge ? false : compareAndLog(savedText, ch.text, ui);
-      if (merge) ui.log('     сверка chrF пропущена: у разбитой главы прежний текст абзацами и не показателен', 'plain');
+        .join('\n\n') || null;
+      const same = compareAndLog(savedText, ch.text, ui);
       const titleSame = titleNorm(siteTitle) === titleNorm(ch.title);
 
       /* Последний заслон перед записью: даже при «правильном» номере глава
@@ -1036,30 +924,7 @@ async function writePlan(plan, parsed, opts, ui) {
         }
 
         if (doText) {
-          if (merge) {
-            /* Сведение к одному блоку. Сначала текст — в первый фрагмент:
-               если оборвётся на удалении, глава останется с полным новым
-               текстом и лишними кусками старого (видно и чинимо). Обратный
-               порядок при обрыве оставил бы главу пустой.
-               Удаляются последние фрагменты, первый (с новым текстом)
-               остаётся. */
-            await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);
-            ui.log(`     текст залит в первый фрагмент (${ch.text.length}с)`, 'ok');
-            await globalPause(CFG.intraMs, CFG.jitterMs);
-
-            /* Лишние фрагменты снимаются ОДНИМ запросом: форма массовых
-               действий работает по отмеченным чекбоксам `o[]`, и тридцать
-               фрагментов — это один POST. Пофрагментное удаление тут не
-               запасной путь, а вред: у главы бывает до шестидесяти
-               фрагментов, и на книге в две тысячи глав это сто двадцать
-               тысяч запросов подряд — спам, за который сервер и банит. */
-            const extraIds = pairs.slice(1).map(p2 => p2.origId);
-            const removed = await removeFragmentsBulk(doc, extraIds);
-            st.fragRemoved += removed;
-            ui.log(`     фрагментов удалено одним запросом: ${removed}`, 'ok');
-          } else {
           await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);
-          }
           if (CFG.verify) {
             await globalPause(CFG.intraMs, 0);
             const vDoc = (await getDoc(info.url)).doc;
@@ -1087,7 +952,7 @@ async function writePlan(plan, parsed, opts, ui) {
   ui.setProgress(total, total);
   const summary = opts.dryRun
     ? `=== DRY-RUN: зальётся ${st.wouldSave}, пропущено ${st.skipSame}, не найдено ${st.skipOther}, неоднозначных ${st.ambiguous}, вне диапазона ${st.skipRange}, проблемных ${st.skipProblem} ===`
-    : `=== ГОТОВО: залито ${st.saved}, названий ${st.titleChanged}${st.fragRemoved ? `, фрагментов удалено ${st.fragRemoved}` : ''}, пропущено ${st.skipSame}, не найдено ${st.skipOther}, неоднозначных ${st.ambiguous}, вне диапазона ${st.skipRange}, проблемных ${st.skipProblem}, ошибок ${st.fail} ===`;
+    : `=== ГОТОВО: залито ${st.saved}, названий ${st.titleChanged}, пропущено ${st.skipSame}, не найдено ${st.skipOther}, неоднозначных ${st.ambiguous}, вне диапазона ${st.skipRange}, проблемных ${st.skipProblem}, ошибок ${st.fail} ===`;
   ui.log(summary, st.fail ? 'warn' : 'ok');
 
   if (notFoundNums.length > 0 || notFoundTitles.length > 0) {
@@ -1329,41 +1194,6 @@ html.dark-theme #ru-bulk select, body.dark-theme #ru-bulk select {
 #ru-bulk .ru-muted { color: #777; }
 html.dark-theme #ru-bulk .ru-muted, body.dark-theme #ru-bulk .ru-muted { color: var(--dark-text-muted, #888); }
 #ru-bulk .ru-sep { border-top: 1px solid #e5e5e5; margin: 10px 0 !important; padding: 0 !important; }
-
-/* Подтверждение перед сводом разбитых глав. Своё окно нужно потому, что
-   решение принимается до первой записи и должно быть видно над страницей, а
-   не строкой в логе: удаление фрагментов необратимо. */
-#ru-confirm { position: fixed; inset: 0; z-index: 100000; display: none; }
-#ru-confirm.ru-open { display: flex; align-items: center; justify-content: center; }
-#ru-confirm .ru-cf-back { position: absolute; inset: 0; background: rgba(0, 0, 0, .45); }
-#ru-confirm .ru-cf-box {
-  position: relative; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 80px);
-  display: flex; flex-direction: column; border-radius: 6px; overflow: hidden;
-  background: #fff; color: #333; border: 1px solid #ccc;
-  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
-  text-align: left !important;
-}
-html.dark-theme #ru-confirm .ru-cf-box, body.dark-theme #ru-confirm .ru-cf-box {
-  background: var(--dark-bg-card, #2a2a2a); color: var(--dark-text-primary, #e0e0e0);
-  border-color: var(--dark-border-primary, #404040);
-}
-#ru-confirm .ru-cf-hd { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid #ddd; background: #f5f5f5; }
-html.dark-theme #ru-confirm .ru-cf-hd, body.dark-theme #ru-confirm .ru-cf-hd {
-  background: var(--dark-bg-secondary, #2d2d2d); border-bottom-color: var(--dark-border-primary, #404040);
-}
-#ru-confirm .ru-cf-bd { padding: 12px 14px; overflow-y: auto; }
-#ru-confirm .ru-cf-bd p { margin: 0 0 9px; }
-#ru-confirm .ru-cf-list { margin: 0 0 9px; padding-left: 18px; max-height: 150px; overflow-y: auto; }
-#ru-confirm .ru-cf-list li { margin: 0 0 3px; }
-#ru-confirm .ru-cf-acts { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-top: 1px solid #ddd; }
-html.dark-theme #ru-confirm .ru-cf-acts, body.dark-theme #ru-confirm .ru-cf-acts { border-top-color: var(--dark-border-primary, #404040); }
-#ru-confirm button {
-  background: #e9e9e9; color: #333; border: 1px solid #ccc; border-radius: 4px;
-  padding: 6px 12px; cursor: pointer; font: inherit !important;
-}
-#ru-confirm button:hover { background: #ddd; }
-#ru-confirm button.ru-danger { background: #c9302c; border-color: #ac2925; color: #fff; }
-#ru-confirm button.ru-danger:hover { background: #ac2925; }
 html.dark-theme #ru-bulk .ru-sep, body.dark-theme #ru-bulk .ru-sep { border-top-color: var(--dark-border-light, #333); }
 
 /* Таблица плана видна всегда: отдельной кнопки «План» нет, план и есть работа. */
@@ -1605,7 +1435,6 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
   <div class="ru-row">
     <label title="Перечитать главу после записи и сверить текст"><input type="checkbox" id="ru-verify" ${CFG.verify ? 'checked' : ''}> Проверять результат</label>
     <label title="Не лить главы, чей текст и название уже совпадают"><input type="checkbox" id="ru-skip-same" ${CFG.skipSame ? 'checked' : ''}> Пропуск совп.</label>
-    <label title="Глава на сайте разбита на несколько фрагментов: лишние фрагменты удаляются, текст ложится одним блоком в первый. Перед работой панель покажет такие главы и спросит согласие — удаление фрагмента необратимо. Снятая галочка оставляет разбитые главы нетронутыми"><input type="checkbox" id="ru-multi-frag" ${CFG.multiFragment === 'merge' ? 'checked' : ''}> Сводить фрагменты в один</label>
   </div>
   <div class="ru-row">
     <span class="ru-muted">Названия глав:</span>
@@ -1622,25 +1451,6 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
 {
   const tplDoc = new DOMParser().parseFromString('<body>' + panelMarkup + '</body>', 'text/html');
   for (const node of [...tplDoc.body.childNodes]) panel.appendChild(document.adoptNode(node));
-}
-
-/* Окно подтверждения — отдельным слоем в body: внутри панели `position:
-   fixed` считается от панели, и окно уезжало бы вместе с прокруткой книги. */
-const confirmMarkup = `<div id="ru-confirm" role="dialog" aria-modal="true" aria-labelledby="ru-confirm-hd">
-  <div class="ru-cf-back"></div>
-  <div class="ru-cf-box">
-    <div class="ru-cf-hd" id="ru-confirm-hd">Главы разбиты на фрагменты</div>
-    <div class="ru-cf-bd" id="ru-confirm-bd"></div>
-    <div class="ru-cf-acts">
-      <button type="button" id="ru-confirm-no">Остановить</button>
-      <button type="button" id="ru-confirm-skip">Не трогать такие главы</button>
-      <button type="button" class="ru-danger" id="ru-confirm-go">Свести к одному</button>
-    </div>
-  </div>
-</div>`;
-{
-  const tplDoc2 = new DOMParser().parseFromString('<body>' + confirmMarkup + '</body>', 'text/html');
-  for (const node of [...tplDoc2.body.childNodes]) document.body.appendChild(document.adoptNode(node));
 }
 
 /* Кнопка-переключатель в стиле сайта (btn btn-default — тот же класс, что у
@@ -2055,16 +1865,6 @@ async function checkRow(row) {
       log(`«${row.title}» — нет вашего перевода на этой главе.`, 'warn');
       return;
     }
-    /* Разбитая глава: прежний текст лежит абзацами по чужой разбивке, и
-       chrF с файлом ничего не значит. Честнее сказать это прямо, чем
-       показать низкий счёт и «НЕ похожа» на верной главе. */
-    if (pairs.length > 1) {
-      reports.set(row.fi, { status: `разбита на ${pairs.length} фрагментов`, chrf: null });
-      log(`«${row.title}» — на сайте разбита на ${pairs.length} фрагментов: `
-        + 'сверка chrF здесь не показательна, при заливке глава сведётся к одному блоку.', 'warn');
-      renderPlan();
-      return;
-    }
     const savedText = readSavedText(doc, pairs[0].trId);
     if (savedText == null) {
       reports.set(row.fi, { status: 'на сайте пусто', chrf: null });
@@ -2220,7 +2020,6 @@ async function launch() {
   CFG.delayMs = parseInt($('ru-delay').value, 10) || 2500;
   CFG.jitterMs = parseInt($('ru-jitter').value, 10) || 0;
   CFG.titleMode = $('ru-title-mode').value;
-  CFG.multiFragment = $('ru-multi-frag').checked ? 'merge' : 'skip';
   const rangeStr = $('ru-range').value.trim();
   if (plan) planSetRange(plan, rangeStr);
 
@@ -2230,13 +2029,7 @@ async function launch() {
   setBusy(true);
   log('=== ЗАПУСК ===', 'ok');
   try {
-    const res = await run(parsed, {
-      dryRun: false, skipSame: CFG.skipSame, rangeStr, plan,
-      /* Согласие спрашивается на первой же разбитой главе — до того, как
-         удалён хоть один фрагмент. Предварительный обход всех глав стоил бы
-         страницы на каждую главу книги ещё до начала работы. */
-      askFragmented: (info) => askFragments(info),
-    }, ui);
+    const res = await run(parsed, { dryRun: false, skipSame: CFG.skipSame, rangeStr, plan }, ui);
     if (res && res.reports) {
       reports = new Map(res.reports.map(r => [r.fi, r]));
       plan = res.plan || plan;
@@ -2245,59 +2038,6 @@ async function launch() {
   } finally {
     setBusy(false);
   }
-}
-
-/* Окно подтверждения свода разбитой главы.
-
-   Возвращает обещание с ответом: 'merge' — свести, 'skip' — не трогать
-   разбитые главы до конца прогона, 'stop' — прекратить работу. Закрытие
-   крестиком, Esc и клик по подложке считаются отказом: согласие на удаление
-   не должно получаться случайным нажатием. */
-function askFragments(info) {
-  return new Promise(resolve => {
-    /* `$` ищет внутри панели, а окно лежит слоем в body: у него свои
-       ссылки на элементы. */
-    const box = document.getElementById('ru-confirm');
-    const bd = document.getElementById('ru-confirm-bd');
-    while (bd.firstChild) bd.removeChild(bd.firstChild);
-
-    const p1 = document.createElement('p');
-    p1.textContent = `«${info.title}» на сайте разбита на фрагменты: их ${info.count}. `
-      + 'Такая глава сводится к одному блоку — текст ляжет в первый фрагмент, лишние удалятся '
-      + 'вместе со своими переводами и комментариями. Отменить это нельзя.';
-    bd.appendChild(p1);
-
-    const p2 = document.createElement('p');
-    p2.textContent = 'Сверка chrF и «пропуск совпадающего» на этой главе не работают: прежний текст '
-      + 'лежит абзацами по чужой разбивке, и сравнивать его с файлом нечего. '
-      + 'Лишние фрагменты снимутся одним запросом. Остальные главы пойдут обычным порядком.';
-    bd.appendChild(p2);
-
-    const go = document.getElementById('ru-confirm-go');
-    const no = document.getElementById('ru-confirm-no');
-    const skip = document.getElementById('ru-confirm-skip');
-    const back = box.querySelector('.ru-cf-back');
-
-    let done = false;
-    const finish = (val) => {
-      if (done) return;
-      done = true;
-      box.classList.remove('ru-open');
-      go.onclick = null;
-      no.onclick = null;
-      skip.onclick = null;
-      back.onclick = null;
-      document.removeEventListener('keydown', onKey, true);
-      resolve(val);
-    };
-    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish('skip'); } };
-    document.addEventListener('keydown', onKey, true);
-    go.onclick = () => finish('merge');
-    no.onclick = () => finish('stop');
-    skip.onclick = () => finish('skip');
-    back.onclick = () => finish('skip');
-    box.classList.add('ru-open');
-  });
 }
 
 $('ru-start').onclick = () => launch();

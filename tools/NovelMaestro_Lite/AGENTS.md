@@ -112,4 +112,4 @@ curl -s "https://purge.jsdelivr.net/gh/LynxPDA/NovelMaestro@main/tools/NovelMaes
 
 ## 5. Текущее состояние (сверять с git)
 
-Lite — v1.54 (24 части), rulate — v2.19.0 (3 части). История изменений — только в git (`git log --oneline -- tools/NovelMaestro_Lite`): отдельного CHANGELOG у Lite нет, а блоков «Сессия после …» в корневом `TODO.md` больше нет.
+Lite — v1.54 (24 части), rulate — v2.20.0 (3 части). История изменений — только в git (`git log --oneline -- tools/NovelMaestro_Lite`): отдельного CHANGELOG у Lite нет, а блоков «Сессия после …» в корневом `TODO.md` больше нет.
