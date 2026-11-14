@@ -13,7 +13,7 @@
 | `build_codemirror_bundle.mjs` | сборка вендорного бандла CodeMirror | редакторы SPA подсвечивают ровно то, что лежит в `web/static/vendor/` (режимы из CDN не подгружаются), так что язык подсветки добавляется здесь; npm живёт ВНЕ репо (временный каталог в `/tmp`) — своей npm-папки и сборки в репозитории нет и не будет |
 | `vendor_assets.py` | манифест локальных библиотек SPA | интерфейс обязан работать офлайн: версии, лицензии и sha256 каждого файла `web/static/vendor/` учтены, а `check` не даёт протащить CDN в `index.html` и молча подменить байт |
 
-У каждого скрипта — свой `README.md` (пользовательское описание и установка) и `DEVELOPERS.md` (техническая документация): [NovelMaestro_Lite](NovelMaestro_Lite/README.md), [rulate_reload](rulate_reload/README.md). Здесь — только общий обзор и сборка.
+У каждого скрипта — свой `README.md` (пользовательское описание и установка): [NovelMaestro_Lite](NovelMaestro_Lite/README.md), [rulate_reload](rulate_reload/README.md). Техническая часть — `DEVELOPERS.md` рядом с `README.md`; у rulate её заменяет `README.md` вместе с комментариями в `src/`. Здесь — только общий обзор и сборка.
 
 ## Раскладка юзерскрипта
 

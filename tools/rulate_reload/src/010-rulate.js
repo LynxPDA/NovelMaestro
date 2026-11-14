@@ -548,15 +548,23 @@ let running = false;        // идёт заливка: панель не зак
    Без двух отметок времени скорости нет: одна точка не даёт темпа, поэтому
    возвращаем null — «считать не по чему», а не нуль (нуль читался бы как
    «уже готово»). */
+/* Темп заливки по отметкам `setProgress`.
+
+   Отметка ставится ПЕРЕД работой над главой, поэтому интервал между двумя
+   соседними отметками — это полное время предыдущей главы, включая паузу
+   после неё. Считается так намеренно: пауза `delayMs` идёт после каждой
+   главы и входит в темп, иначе остаток был бы занижен на её величину, а на
+   2000 глав это разница в час.
+
+   Нужны две отметки: по одной интервала нет, и остаток не показывается
+   вовсе — прочерк на старте читался бы как поломка. */
 function etaParts(done, total, samples) {
-  if (samples == null || samples.length < 2) return null;
   const left = total - done;
   if (left <= 0) return { ms: 0, perChapterMs: 0 };
-  const first = samples[0].at, last = samples[samples.length - 1].at;
-  const chapters = samples[samples.length - 1].done - samples[0].done;
-  const span = last - first;
-  /* Окно схлопнулось: главы обработаны без задержек (всё пропущено),
-     длительности нет — по чему считать темп, тоже нет. */
+  if (samples == null || samples.length < 2) return null;
+  const a = samples[0], b = samples[samples.length - 1];
+  const chapters = b.done - a.done;
+  const span = b.at - a.at;
   if (chapters <= 0 || span <= 0) return null;
   const per = span / chapters;
   return { ms: per * left, perChapterMs: per };
@@ -807,7 +815,7 @@ async function writePlan(plan, parsed, opts, ui) {
         st.ambiguous++;
         ui.log(`${tick} «${ch.title}» — НЕОДНОЗНАЧНО: №${ch.num} на сайте у ${row.cands.length} глав:`, 'err');
         for (const g of row.cands) ui.log(`     id=${g.chapterId} «${g.siteTitle}»`, 'err');
-        ui.log('     → выберите главу в панели (кнопка «План») или допишите номер в тег `:|:`', 'warn');
+        ui.log('     → выберите главу в списке строки или допишите номер в тег `:|:`', 'warn');
         report(row, 'неоднозначно');
       } else {
         st.skipOther++;
@@ -870,13 +878,7 @@ async function writePlan(plan, parsed, opts, ui) {
       const { origId, trId } = pairs[0];
       ui.log(`${tick} «${ch.title}» ↔ «${siteTitle}» | chap=${info.chapterId} orig=${origId} tr=${trId} | ${ch.text.length}с`, 'plain');
 
-      /* Сохранённый перевод читается по ВСЕМ фрагментам: при разбиении
-         сравнение с первым абзацем дало бы chrF около нуля и ложный отказ
-         «глава не та». */
-      const savedText = pairs
-        .map(p2 => readSavedText(doc, p2.trId))
-        .filter(t => t != null)
-        .join('\n\n') || null;
+      const savedText = readSavedText(doc, trId);
       const same = compareAndLog(savedText, ch.text, ui);
       const titleSame = titleNorm(siteTitle) === titleNorm(ch.title);
 
@@ -1196,7 +1198,7 @@ html.dark-theme #ru-bulk .ru-muted, body.dark-theme #ru-bulk .ru-muted { color: 
 #ru-bulk .ru-sep { border-top: 1px solid #e5e5e5; margin: 10px 0 !important; padding: 0 !important; }
 html.dark-theme #ru-bulk .ru-sep, body.dark-theme #ru-bulk .ru-sep { border-top-color: var(--dark-border-light, #333); }
 
-/* Таблица плана видна всегда: отдельной кнопки «План» нет, план и есть работа. */
+/* Таблица плана видна всегда: план и есть работа. */
 #ru-bulk .ru-plan-box { margin: 0 !important; }
 #ru-bulk .ru-plan-title { margin: 0 !important; }
 #ru-bulk .ru-plan-title b { font-weight: 600; }
@@ -1399,7 +1401,7 @@ const panelMarkup = `<div class="ru-hd"> <b>Обновление глав</b> <s
   <div class="ru-row">
     <input type="file" id="ru-file" accept=".txt,text/plain" style="display:none">
     <button id="ru-pick">Выбрать файл с главами</button>
-    <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Глава, разбитая на сайте на несколько фрагментов, раскладывается по абзацам: каждый абзац текста идёт в свой фрагмент">Старт</button>
+    <button id="ru-start" class="ru-go" disabled title="Залить перевод по плану. Главы, разбитые на сайте на несколько фрагментов, пропускаются: у фрагментов своё деление текста">Старт</button>
     <button id="ru-stop" disabled>Стоп</button>
   </div>
   <div class="ru-row">
@@ -1556,11 +1558,10 @@ const ui = {
 /* План живёт только пока открыта страница: это разбор одного прогона, а не
    свойство книги. Хранить его в localStorage значило бы забивать память
    браузера копией оглавления на каждую книгу — и однажды получить план от
-   прошлого файла, ничего об этом не сказав. Ключа rlPlan больше нет; старые
-   записи не читаются и безвредны. */
+   прошлого файла, ничего об этом не сказав. */
 
-/* Чистка прежних версий: план больше не хранится, а мусор в localStorage
-   оставался бы навсегда (по записи на каждую книгу, куда заходили). */
+/* Мусор от версий, которые план хранили: без чистки он оставался бы навсегда
+   (по записи на каждую книгу, куда заходили). */
 function dropLegacyPlanStore() {
   try {
     const id = 'rlPlan:' + (bookIdFromUrl() || '');
@@ -1752,8 +1753,8 @@ function renderPlan() {
     scheduleFill(select, row);
 
     select.onchange = () => {
-      /* «Не выбрана» — тот же результат, что раньше давала кнопка «Снять»:
-         строка не льётся. */
+      /* «Не выбрана» значит «строку не лить»: отдельной кнопки снятия нет,
+         решение живёт там же, где выбор главы. */
       const res = planAssign(plan, row.fi, select.value || null);
       if (!res.ok) log('Не назначено: ' + res.error, 'err');
       else {
@@ -1928,7 +1929,7 @@ function setPanelOpen(open) {
   toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
   toggleBtn.classList.toggle('active', open);
   if (open) {
-    /* План строится сразу: отдельной кнопки «План» нет, показывать
+    /* План строится сразу: показывать
        пользователю «Плана нет — нажмите ещё что-то» значит требовать
        лишнего шага. Оглавление читается один раз и запоминается. */
     if (parsed.length && !plan) refreshPlan();
@@ -1981,9 +1982,9 @@ $('ru-file').addEventListener('change', (e) => {
     $('ru-plan-filter').value = 'all';
     renderPlan();
     log(`Файл «${f.name}»: глав ${parsed.length} (валидных ${valid.length}).`, valid.length ? 'ok' : 'err');
-    /* План строится сразу: кнопки «План» больше нет, и человек не должен
-       догадываться, что для сопоставления нужен ещё один шаг. Оглавление
-       читается один раз — при повторном «Плане» оно берётся из памяти. */
+    /* План строится сразу: иначе человек догадывается, что для сопоставления
+       нужен ещё один шаг. Оглавление читается один раз — на следующий файл
+       оно берётся из памяти. */
     if (valid.length) refreshPlan();
     if (problems.length) {
       log(`⚠ Проблемных в файле: ${problems.length} (будут пропущены)`, 'warn');
@@ -2024,7 +2025,7 @@ async function launch() {
   if (plan) planSetRange(plan, rangeStr);
 
   /* Строку, которую лить не надо, отмечают «не выбрана» в её списке:
-     отдельного выделения строк в плане больше нет. */
+     отдельного выделения строк нет. */
 
   setBusy(true);
   log('=== ЗАПУСК ===', 'ok');

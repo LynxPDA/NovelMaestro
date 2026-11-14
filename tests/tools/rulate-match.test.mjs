@@ -716,6 +716,17 @@ test('rulate: остаток на нуле, когда всё сделано', a
   assert.equal(eta.ms, 0);
 });
 
+test('rulate: в темп входит пауза после главы, а не только работа над ней', async () => {
+  const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
+  /* Отметка ставится ПЕРЕД главой, поэтому интервал между соседними
+     отметками — это глава вместе с паузой после неё. Без учёта паузы
+     остаток на длинной книге занижался бы на часы. */
+  const marks = [{ done: 0, at: 0 }, { done: 1, at: 2500 }, { done: 2, at: 5000 }];
+  const eta = api.etaParts(2, 10, marks);
+  assert.equal(Math.round(eta.perChapterMs), 2500, 'пауза входит в темп');
+  assert.equal(Math.round(eta.ms / 1000), 20, 'восемь глав по 2.5 с');
+});
+
 test('rulate: остаток подписывается днями, часами, минутами', async () => {
   const { api } = await planFor(SITE_PLAN, ['# [Глава 1. История :|: 1]', 'н1']);
   const s = 1000, m = 60 * s, h = 60 * m, d = 24 * h;
