@@ -426,7 +426,19 @@ def test_rulate_panel_invariants():
     # права на книгу: на чужой книге ни кнопки, ни панели
     assert "function canEditBook()" in text, "нет проверки прав на книгу"
     assert "function bookOwnerFromHtml(html)" in text, "владелец книги не читается со страницы"
-    assert "if (canEditBook()) {" in text, "проверка прав не стоит перед построением панели"
+    assert "if (!canEditBook()) return;" in text, "проверка прав не стоит перед построением панели"
+    # Обёртка блоком `if` создавала вторую область видимости: объявления
+    # внутри (allSiteOptions, optionFor) становились невидимыми для функций,
+    # объявленных ВЫШЕ блока, — список глав падал с ReferenceError при
+    # касании, и в ниспадающем списке оставался один пункт «не выбрана».
+    assert "if (canEditBook()) {" not in text, \
+        "панель снова в блоке `if`: функции доступа к оглавлению перестанут его видеть"
+    assert text.count("if (!canEditBook()) return;") == 1, "выход из скрипта без прав не единственный"
+    # объявления состояния панели — на верхнем уровне, без отступа
+    for decl in ("const panel = document.createElement('div');", "let site = null;",
+                 "const allSiteOptions ="):
+        assert re.search(r"^" + re.escape(decl), text, re.M), \
+            f"объявление {decl!r} попало внутрь блока: область видимости разъедется"
     assert "owner_id" in text, "владелец не берётся из new CBook({owner_id})"
     assert "if (!canEditBook()) return false;" not in text, \
         "права проверяются до появления признаков правки" 
