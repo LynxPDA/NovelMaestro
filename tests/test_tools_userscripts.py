@@ -413,6 +413,16 @@ def test_rulate_panel_invariants():
     assert "massAction" not in text, "вернулось массовое удаление фрагментов"
     assert "/remove`" not in text, "вернулось удаление фрагмента"
 
+    # пауза intraMs держится только перед изменяющим запросом: после чтения
+    # она платилась и у главы, где всё уже совпадает (пропуск), а на 600 главах
+    # это минуты ожидания при нуле записей
+    assert "if (doText || doTitle) await globalPause(CFG.intraMs, 0);" in text, \
+        "пауза перед записью пропала: два запроса подряд идут залпом"
+    read_block = text[text.index("const { html, doc } = await getDoc(info.url);"):]
+    read_block = read_block[:read_block.index("const userId = userIdFromHtml(html);")]
+    assert "globalPause" not in read_block, \
+        "пауза вернулась сразу после чтения: платится и при пропуске главы"
+
     # права на книгу: на чужой книге ни кнопки, ни панели
     assert "function canEditBook()" in text, "нет проверки прав на книгу"
     assert "function bookOwnerFromHtml(html)" in text, "владелец книги не читается со страницы"

@@ -534,6 +534,9 @@ function chrfVerdict(score) {
 }
 
 let progressMarks = [];     // {done, at} — темп заливки для остатка
+/* Длительности сетевых запросов текущего прогона. Темп складывается из
+   пауз и сети, и по одному «с/глава» не видно, чего в нём сколько. */
+let netMarks = [];
 let running = false;        // идёт заливка: панель не закрывается сама
 
 /* Сколько времени ещё осталось при текущем темпе.
@@ -793,6 +796,8 @@ async function writePlan(plan, parsed, opts, ui) {
   st.skipProblem = plan.problems.length;
   if (plan.problems.length) ui.log(`Проблемных в файле: ${plan.problems.length} (пропущены)`, 'warn');
 
+  const tRun = Date.now();
+
   for (let job = 0; job < entries.length; job++) {
     const row = entries[job];
     if (ui.aborted) { ui.log('Остановлено.', 'warn'); break; }
@@ -847,8 +852,9 @@ async function writePlan(plan, parsed, opts, ui) {
       }
 
       /* ===== РЕЖИМЫ: ТОЛЬКО ТЕКСТ / ТЕКСТ + НАЗВАНИЯ ===== */
+      const tRead0 = Date.now();
       const { html, doc } = await getDoc(info.url);
-      await globalPause(CFG.intraMs, 0);
+      netMarks.push(Date.now() - tRead0);
 
       const userId = userIdFromHtml(html);
       if (!userId) throw new Error('Нет данных пользователя — вы залогинены?');
@@ -916,6 +922,12 @@ async function writePlan(plan, parsed, opts, ui) {
         ui.log('     пропущено (всё совпадает)', 'plain');
         report(row, 'пропуск');
       } else {
+        /* Пауза держится только перед изменяющим запросом. После чтения она
+           стояла всегда, и глава, у которой текст уже совпадает, платила
+           400 мс ни за что: на 600 главах это больше трёх минут ожидания
+           при нуле записей. */
+        if (doText || doTitle) await globalPause(CFG.intraMs, 0);
+
         if (doTitle) {
           await saveChapterTitle(plan.bookId, info.chapterId, ch.title, csrf);
           st.titleChanged++;
@@ -926,7 +938,9 @@ async function writePlan(plan, parsed, opts, ui) {
         }
 
         if (doText) {
+          const tWrite0 = Date.now();
           await saveTranslation(plan.bookId, info.chapterId, origId, trId, ch.text, csrf);
+          netMarks.push(Date.now() - tWrite0);
           if (CFG.verify) {
             await globalPause(CFG.intraMs, 0);
             const vDoc = (await getDoc(info.url)).doc;
@@ -957,6 +971,15 @@ async function writePlan(plan, parsed, opts, ui) {
     : `=== ГОТОВО: залито ${st.saved}, названий ${st.titleChanged}, пропущено ${st.skipSame}, не найдено ${st.skipOther}, неоднозначных ${st.ambiguous}, вне диапазона ${st.skipRange}, проблемных ${st.skipProblem}, ошибок ${st.fail} ===`;
   ui.log(summary, st.fail ? 'warn' : 'ok');
 
+  /* Из чего сложилось время: «с/глава» само по себе не говорит, ждали ли
+     сайт или выжидали паузу. Без этой строки медленный ответ сайта
+     выглядит как лишняя задержка в скрипте. */
+  const spentMs = Date.now() - tRun;
+  const netMs = netMarks.reduce((a, c) => a + c, 0);
+  if (spentMs > 0 && netMarks.length) {
+    ui.log(`⏱ времени ${formatEta(spentMs)}: сеть ${formatEta(netMs)} (${netMarks.length} запросов, в среднем ${Math.round(netMs / netMarks.length)} мс), паузы и разбор ${formatEta(spentMs - netMs)}`, 'plain');
+  }
+
   if (notFoundNums.length > 0 || notFoundTitles.length > 0) {
     const parts = [];
     if (notFoundNums.length > 0) parts.push(`Главы: ${notFoundNums.sort((a, b) => a - b).join(', ')}`);
@@ -976,6 +999,7 @@ async function run(parsed, opts, ui) {
   ui.log(`Книга #${bookId} | Глав: ${parsed.length} | dry-run: ${opts.dryRun ? 'ДА' : 'нет'}`, 'ok');
   const tmLabel = CFG.titleMode === 'off' ? 'выкл' : CFG.titleMode === 'title-only' ? 'ТОЛЬКО названия' : 'названия + текст';
   progressMarks.length = 0;
+  netMarks = [];
   ui.setProgress(0, parsed.length);
   ui.log(`Названия: ${tmLabel} | Пауза: ${CFG.delayMs}мс ± ${CFG.jitterMs}мс`, 'plain');
   ui.log(opts.dryRun ? 'Режим: DRY-RUN' : (opts.skipSame ? 'Режим: совпадающие ПРОПУСКАЮТСЯ (текст и названия).' : 'Режим: ПРИОРИТЕТ ФАЙЛА — льётся КАЖДАЯ найденная глава.'), 'plain');
@@ -1551,7 +1575,10 @@ const ui = {
       if (progressMarks.length > 31) progressMarks.shift();
     }
     const txt = $('ru-prog-txt');
-    if (txt) txt.textContent = progressText(i, n, progressMarks.slice(-30));
+    if (txt) {
+      txt.textContent = progressText(i, n, progressMarks.slice(-30))
+        + (netMarks.length ? ` · сеть ${Math.round(netMarks.reduce((a, c) => a + c, 0) / netMarks.length)} мс/запрос` : '');
+    }
   },
 };
 
