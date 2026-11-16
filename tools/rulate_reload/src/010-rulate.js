@@ -785,6 +785,10 @@ async function writePlan(plan, parsed, opts, ui) {
   const st = { saved: 0, wouldSave: 0, skipSame: 0, skipOther: 0, skipRange: 0, skipProblem: 0, fail: 0, titleChanged: 0, ambiguous: 0 };
   const notFoundNums = [];
   const notFoundTitles = [];
+  /* Счётчик ошибок сам по себе бесполезен: по «ошибок 1» нельзя ни найти
+     главу, ни понять, что с ней. Каждая ошибка запоминается с причиной и
+     печатается в конце — иначе искать её в логе на тысячу строк. */
+  const failures = [];
   const reports = [];
   const report = (row, status, chrf) => reports.push({ fi: row.fi, status, chrf: chrf == null ? null : chrf });
 
@@ -897,6 +901,7 @@ async function writePlan(plan, parsed, opts, ui) {
       if (CFG.minChrf > 0 && savedText != null) similar = looksLikeSameChapter(savedText, ch.text);
       if (similar && !similar.ok) {
         st.fail++;
+        failures.push({ ch, why: `не похожа на главу сайта (chrF ${similar.chrf.toFixed(3)})` });
         ui.log(`     ОТКАЗ: глава на сайте не похожа на нашу (chrF ${similar.chrf.toFixed(3)} < ${CFG.minChrf}) — нумерация разъехалась?`, 'err');
         ui.log('     → сверьте главу глазами; запись не выполнена', 'warn');
         report(row, 'отказ chrF', similar.chrf);
@@ -947,6 +952,7 @@ async function writePlan(plan, parsed, opts, ui) {
             const vRaw = readSavedText(vDoc, trId);
             if (norm(vRaw == null ? '' : vRaw) !== norm(ch.text)) {
               st.fail++;
+              failures.push({ ch, why: 'текст после записи не совпал с файлом' });
               ui.log('     ВНИМАНИЕ: после сохранения текст не совпал!', 'err');
               if (vRaw != null) { const d = firstDiff(norm(vRaw), norm(ch.text)); ui.log(`        сайт: ${d.site}`, 'plain'); ui.log(`        файл: ${d.file}`, 'plain'); }
               report(row, 'расхождение после записи');
@@ -960,7 +966,12 @@ async function writePlan(plan, parsed, opts, ui) {
         }
         report(row, 'залито', similar ? similar.chrf : null);
       }
-    } catch (e) { st.fail++; ui.log('     ОШИБКА: ' + e.message, 'err'); report(row, 'ошибка: ' + e.message); }
+    } catch (e) {
+      st.fail++;
+      failures.push({ ch, why: e.message });
+      ui.log('     ОШИБКА: ' + e.message, 'err');
+      report(row, 'ошибка: ' + e.message);
+    }
 
     if (job < total - 1 && !ui.aborted) await globalPause(opts.dryRun ? CFG.dryMs : CFG.delayMs, CFG.jitterMs);
   }
@@ -985,6 +996,15 @@ async function writePlan(plan, parsed, opts, ui) {
     if (notFoundNums.length > 0) parts.push(`Главы: ${notFoundNums.sort((a, b) => a - b).join(', ')}`);
     if (notFoundTitles.length > 0) parts.push(`Без номера: ${notFoundTitles.join('; ')}`);
     ui.log(`Не найдены на сайте → ${parts.join(' | ')}`, 'warn');
+  }
+
+  if (failures.length) {
+    ui.log(`Ошибки по главам (${failures.length}):`, 'err');
+    for (const f of failures) {
+      const num = f.ch.num != null ? `№${f.ch.num}` : 'без номера';
+      ui.log(`   · ${num} «${f.ch.title}» — ${f.why}`, 'err');
+    }
+    ui.log('   → эти главы не обновлены; причину видно и выше в логе, у самой главы', 'warn');
   }
 
   return Object.assign({ reports }, st);
@@ -2031,6 +2051,14 @@ $('ru-stop').onclick = () => { aborted = true; log('Запрошена оста�
    который человек задал: поменял диапазон — перестроиться сразу, а не
    узнать о расхождении при заливке. Перестраивать план целиком незачем:
    меняется только состав работы (rangeSet), решения остаются те же. */
+/* Ввод диапазона перерисовывает план с паузой после последнего нажатия.
+
+   Подсказка под полем обновляется сразу — она дешёвая. А перерисовка плана
+   строит все строки заново: на книге в 3000 глав это около 800 мс. Пока
+   перерисовка шла на каждое нажатие, набор «1-50» замирал на три секунды, а
+   браузер успевал показать «страница не отвечает» — тем заметнее, чем
+   больше книга. */
+let rangeTimer = 0;
 $('ru-range').addEventListener('input', () => {
   const rr = parseRangeReport($('ru-range').value);
   const hint = $('ru-range-hint');
@@ -2039,7 +2067,8 @@ $('ru-range').addEventListener('input', () => {
   else { hint.textContent = ''; }
   if (!plan) return;
   planSetRange(plan, $('ru-range').value);
-  renderPlan();
+  clearTimeout(rangeTimer);
+  rangeTimer = setTimeout(renderPlan, 350);
 });
 
 async function launch() {

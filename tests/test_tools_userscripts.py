@@ -423,6 +423,20 @@ def test_rulate_panel_invariants():
     assert "globalPause" not in read_block, \
         "пауза вернулась сразу после чтения: платится и при пропуске главы"
 
+    # ошибки перечисляются с главой и причиной: по «ошибок 1» главу не найти
+    assert "const failures = [];" in text, "ошибки не запоминаются поимённо"
+    for why in ("не похожа на главу сайта (chrF", "текст после записи не совпал с файлом"):
+        assert why in text, f"ошибка «{why}» не попадает в перечень"
+    assert "failures.push({ ch, why: e.message });" in text, "исключение не попадает в перечень"
+    assert "Ошибки по главам (${failures.length})" in text, "перечень ошибок не печатается в итоге"
+
+    # ввод диапазона не перерисовывает план на каждое нажатие: на книге
+    # в 3000 глав перерисовка занимает около 800 мс, и набор «1-50» вешал
+    # страницу на три секунды
+    assert "rangeTimer = setTimeout(renderPlan, 350);" in text, \
+        "ввод диапазона снова перерисовывает план на каждый символ"
+    assert "clearTimeout(rangeTimer);" in text, "предыдущая перерисовка не отменяется"
+
     # права на книгу: на чужой книге ни кнопки, ни панели
     assert "function canEditBook()" in text, "нет проверки прав на книгу"
     assert "function bookOwnerFromHtml(html)" in text, "владелец книги не читается со страницы"
