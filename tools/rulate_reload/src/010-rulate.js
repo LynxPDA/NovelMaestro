@@ -161,10 +161,39 @@ function looksLikeSameChapter(a, b) {
   return { ok: score >= CFG.minChrf, chrf: score };
 }
 
+/* Причина сетевого сбоя человеческим текстом.
+
+   `fetch` бросает «Failed to fetch» — по этой строке нельзя понять, оборвалась
+   сеть или сайт закрыл соединение, а в перечне ошибок она не подсказывает
+   действие. Код ответа тоже мало что говорит без объяснения: 403 на странице
+   главы почти всегда значит «сессия истекла или нет доступа». */
+function netReason(e, what) {
+  const msg = (e && (e.message || e.name)) || String(e) || '';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+    return `${what}: связь прервалась (сеть или сайт закрыл соединение)`;
+  }
+  if (/abort/i.test(msg)) return `${what}: запрос отменён`;
+  return msg ? `${what}: ${msg}` : `${what}: неизвестная причина`;
+}
+
+function httpReason(status, what) {
+  if (status === 401 || status === 403) return `${what}: нет доступа (${status}) — сессия истекла? войдите заново`;
+  if (status === 404) return `${what}: страница не найдена (404) — глава удалена?`;
+  if (status === 429) return `${what}: сайт просит сбавить темп (429) — увеличьте паузу`;
+  if (status >= 500) return `${what}: ошибка на стороне сайта (${status}) — повторите позже`;
+  return `${what}: ответ ${status}`;
+}
+
 async function getDoc(url) {
-  const res = await fetch(url, { credentials: 'include' });
-  if (!res.ok) throw new Error('GET ' + res.status + ' ' + url);
-  const html = await res.text();
+  let res;
+  try { res = await fetch(url, { credentials: 'include' }); }
+  catch (e) { throw new Error(netReason(e, 'чтение страницы главы')); }
+  if (!res.ok) throw new Error(httpReason(res.status, 'чтение страницы главы'));
+  /* Тело читается отдельным шагом и тоже может оборваться: заголовки уже
+     пришли, а соединение упало на середине страницы. */
+  let html;
+  try { html = await res.text(); }
+  catch (e) { throw new Error(netReason(e, 'чтение страницы главы')); }
   return { html, doc: new DOMParser().parseFromString(html, 'text/html') };
 }
 
@@ -374,15 +403,43 @@ function readSavedText(doc, trId) {
 }
 
 /* ---------- POST сохранения перевода ---------- */
+/* Ответ на запись разбирается, а не только проверяется по коду.
+
+   Сайт отвечает JSON-статусом, и отказ может прийти с `200`: текст не принят,
+   а по коду всё хорошо. Читается только явный отказ — `ok: false`, непустые
+   `err`/`error`, `status: 0` или `status: 'error'`; всё остальное считается
+   успехом. Пустое тело и не-JSON тоже успех: формат ответа не наш контракт,
+   а ломать запись из-за него нельзя. */
+async function checkWriteReply(res, what) {
+  let text;
+  try { text = await res.text(); }
+  catch (e) { throw new Error(netReason(e, what)); }
+  if (!text || !/^\s*[[{]/.test(text)) return;
+  let data;
+  try { data = JSON.parse(text); } catch (e) { return; }
+  if (!data || typeof data !== 'object') return;
+  const err = typeof data.err === 'string' ? data.err
+    : typeof data.error === 'string' ? data.error
+      : (data.errors && typeof data.errors === 'object')
+        ? Object.values(data.errors).flat().filter(Boolean).join('; ') : '';
+  const bad = data.ok === false || err
+    || data.status === 0 || data.status === 'error' || data.status === 'fail' || data.success === false;
+  if (bad) throw new Error(`${what}: сайт отказал${err ? ' — ' + err : ''}`);
+}
+
 async function saveTranslation(bookId, chapterId, origId, trId, body, csrf) {
   const fd = new FormData();
   fd.append('Translation[body]', body);
   fd.append('Translation[new_img]', new Blob([]), '');
   fd.append('ajax', '1');
   fd.append('YII_CSRF_TOKEN', csrf);
-  const res = await fetch(`/book/${bookId}/${chapterId}/${origId}/translate?tr_id=${trId}`,
-    { method: 'POST', credentials: 'include', body: fd });
-  if (!res.ok) throw new Error('POST translate ' + res.status);
+  let res;
+  try {
+    res = await fetch(`/book/${bookId}/${chapterId}/${origId}/translate?tr_id=${trId}`,
+      { method: 'POST', credentials: 'include', body: fd });
+  } catch (e) { throw new Error(netReason(e, 'запись текста главы')); }
+  if (!res.ok) throw new Error(httpReason(res.status, 'запись текста главы'));
+  await checkWriteReply(res, 'запись текста главы');
   return res;
 }
 
@@ -412,8 +469,11 @@ async function saveChapterTitle(bookId, chapterId, newTitle, csrf) {
   fd.append('yt0', '');
   fd.append('YII_CSRF_TOKEN', editCsrf);
 
-  const res = await fetch(editUrl, { method: 'POST', credentials: 'include', body: fd });
-  if (!res.ok) throw new Error('POST edit ' + res.status);
+  let res;
+  try { res = await fetch(editUrl, { method: 'POST', credentials: 'include', body: fd }); }
+  catch (e) { throw new Error(netReason(e, 'запись названия главы')); }
+  if (!res.ok) throw new Error(httpReason(res.status, 'запись названия главы'));
+  await checkWriteReply(res, 'запись названия главы');
   return res;
 }
 

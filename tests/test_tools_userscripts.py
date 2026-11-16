@@ -430,6 +430,30 @@ def test_rulate_panel_invariants():
     assert "failures.push({ ch, why: e.message });" in text, "исключение не попадает в перечень"
     assert "Ошибки по главам (${failures.length})" in text, "перечень ошибок не печатается в итоге"
 
+    # сетевые сбои объясняются словами: «Failed to fetch» и «GET 403 /book/7/3»
+    # не подсказывают ни что случилось, ни что делать
+    assert "function netReason(e, what)" in text, "сетевой сбой пересказывается техническим текстом"
+    assert "function httpReason(status, what)" in text, "код ответа не объясняется словами"
+    assert "связь прервалась" in text, "обрыв связи не назван по-человечески"
+    assert "сессия истекла? войдите заново" in text, "403 не объяснён"
+    assert "сайт просит сбавить темп (429)" in text, "429 не объяснён"
+    for old in ("throw new Error('GET ' + res.status + ' ' + url);",
+                "throw new Error('POST translate ' + res.status);",
+                "throw new Error('POST edit ' + res.status);"):
+        assert old not in text, f"вернулось техническое сообщение: {old}"
+    # все сетевые точки ходят через объяснение причины
+    assert text.count("netReason(e,") >= 3, "не все запросы объясняют обрыв связи"
+    assert text.count("httpReason(res.status,") >= 3, "не все запросы объясняют код ответа"
+
+    # код 200 с отказом в теле — не успех: сайт валидирует текст и может
+    # не принять его, ответив «ок» по коду
+    assert "async function checkWriteReply(res, what)" in text, \
+        "тело ответа на запись не разбирается: отказ с кодом 200 считается успехом"
+    assert text.count("await checkWriteReply(res,") == 2, \
+        "разбор ответа подключён не к обеим записям (текст и название)"
+    for flag in ("data.ok === false", "data.status === 'error'", "сайт отказал"):
+        assert flag in text, f"отказ в теле не распознаётся: {flag}"
+
     # ввод диапазона не перерисовывает план на каждое нажатие: на книге
     # в 3000 глав перерисовка занимает около 800 мс, и набор «1-50» вешал
     # страницу на три секунды
