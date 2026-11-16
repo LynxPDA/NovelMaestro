@@ -9,7 +9,8 @@
 | [core/README.md](core/README.md) | API общего модуля `core/` |
 | [web/README.md](web/README.md) | Контракт web-слоя и API |
 | [tools/README.md](tools/README.md) | Вспомогательные утилиты вне конвейера: обзор и сборка |
-| [tools/rulate_reload/README.md](tools/rulate_reload/README.md) | Юзерскрипт массового обновления глав на Rulate |
+| [tools/rulate_reload/README.md](tools/rulate_reload/README.md) | Юзерскрипт массового обновления глав на Rulate: лендинг пользователя |
+| [tools/rulate_reload/DEVELOPERS.md](tools/rulate_reload/DEVELOPERS.md) | Юзерскрипт массового обновления глав на Rulate: техническая документация |
 | [tools/NovelMaestro_Lite/README.md](tools/NovelMaestro_Lite/README.md) | Юзерскрипт-переводчик NovelMaestro Lite: лендинг пользователя |
 | [tools/NovelMaestro_Lite/DEVELOPERS.md](tools/NovelMaestro_Lite/DEVELOPERS.md) | Юзерскрипт-переводчик NovelMaestro Lite: техническая документация |
 | [packaging/README.md](packaging/README.md) | Релизные сборки (Docker, Windows) |
