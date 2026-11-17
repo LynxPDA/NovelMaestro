@@ -70,6 +70,8 @@ CORE_API = [
     # время стадии: путь лога и предeл ожидания (сторож web/pipeline.py)
     "stage_log_path", "stage_call_timeout",
 ]
+# Константы core.common, которые видит web-слой (не функции: код возврата стадии)
+CORE_CONSTS = ["WARNING_EXIT", "PROGRESS_PREFIX", "CHAPTER_PREFIX"]
 # Зеркало API core/stage.py (слой стадии: флаги LLM, профиль, контекст, прогресс)
 STAGE_API = ["add_llm_args", "LlmProfile", "resolve_profile", "describe_profile",
              "add_check_prompt_arg", "check_prompt", "complete_until",
@@ -148,6 +150,22 @@ def _agents_text() -> str:
 def test_core_api_exists_in_code(name):
     """Каждая функция из таблицы §6 реально существует в core.common."""
     assert callable(getattr(C, name, None)), f"core.common.{name} исчезла"
+
+
+@pytest.mark.parametrize("name", CORE_CONSTS)
+def test_core_consts_exist(name):
+    """Префиксы событий stdout — контракт JobManager'а: они не переименовываются.
+
+    Зеркало §6 здесь только по существованию: `PROGRESS_PREFIX` и
+    `CHAPTER_PREFIX` описаны в таблице через `emit_line`/`emit_progress`."""
+    assert hasattr(C, name), f"core.common.{name} исчезла"
+
+
+def test_warning_exit_documented():
+    """Код возврата «работа сделана, но с оговорками» описан в §6: без него
+    стадии нечем попросить у web жёлтый статус вместо зелёного."""
+    assert isinstance(C.WARNING_EXIT, int) and C.WARNING_EXIT != 0
+    assert "WARNING_EXIT" in _agents_text()
 
 
 @pytest.mark.parametrize("name", PROJECTS_API)

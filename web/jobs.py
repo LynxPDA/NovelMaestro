@@ -60,9 +60,14 @@ SSE_PING = 15.0  # секунд между ping в стриме
 # рестарта сервера); смерть pid → статус failed + persist. Наблюдатель с этим
 # интервалом живёт только пока сироты есть (см. JobManager._start_watch)
 ORPHAN_POLL = 5.0
+#: код возврата «работа сделана, но с оговорками» (core.common.WARNING_EXIT):
+#: сборка нашла пропущенные главы, но книгу записала. Для запуска это
+#: отдельный финальный статус `warning` — не зелёный done и не красный
+#: failed: человек видит, что сборка прошла, но часть глав в неё не попала.
+WARNING_EXIT = 3
 # Статус «запуск есть, процесса ещё нет»: пока идёт подготовка (точка
 # истории), браузер уже показывает запуск — иначе долгая подготовка
-# выглядит зависшей кнопкой. Затем running | done | failed | stopped.
+# выглядит зависшей кнопкой. Затем running | done | warning | failed | stopped.
 PENDING = "pending"
 # Статусы, пока запуск идёт: подготовка (PENDING) и сам процесс.
 ACTIVE = (PENDING, "running")
@@ -72,6 +77,10 @@ ACTIVE = (PENDING, "running")
 # @@PROGRESS@@ — события прогресса LLM-стадий (core/common.py emit_progress).
 from core.common import (  # noqa: E402
     CHAPTER_PREFIX, PROGRESS_PREFIX, atomic_write)
+from core.common import WARNING_EXIT as _WARNING_EXIT  # noqa: E402
+
+# код предупреждения — ОДИН с core.common: здесь он превращается в статус
+assert WARNING_EXIT == _WARNING_EXIT
 
 _EVENT_PREFIXES = (PROGRESS_PREFIX, CHAPTER_PREFIX)
 
@@ -409,30 +418,33 @@ class JobManager:
         }
 
     def _trim_locked(self) -> None:
-        """(лок уже взят): не более MAX_HISTORY запусков.
+        """(лок уже взят): не более MAX_HISTORY завершённых запусков.
 
-        Активные (running) не выбрасываются, даже если они самые старые:
-        запись — это единственное, по чему `running_on` и `stop` находят
-        процесс. Выброшенный из истории долгий запуск исчезал из
-        интерфейса и снимал лок с проекта, а второй такой же стартовал
-        параллельно — два конвейера писали один и тот же translated.txt
-        (файл рвался посередине UTF-8 символа). Лимит в этом случае
-        превышается: живых запусков не бывает больше WEB_JOBS_LIMIT."""
+        Активные (running/pending) и предупреждения (`warning`) не
+        выбрасываются. Активный — это единственное, по чему `running_on` и
+        `stop` находят процесс (выброшенный из истории долгий запуск исчезал
+        из интерфейса и снимал лок с проекта, и второй такой же стартовал
+        параллельно — два конвейера писали один translated.txt). `warning` —
+        след сборки с пропущенными главами: жёлтый статус обязан дожить до
+        того, как его увидят, а не пропасть от чужих запусков. Лимит в обоих
+        случаях превышается, но предупреждений столько же, сколько прогонов
+        сборки с пропусками.
+        """
         if len(self._jobs) <= self.MAX_HISTORY:
             return
-        # активные считаются в лимите: история держит MAX_HISTORY записей
-        # плюс столько живых, сколько сверх лимита осталось
-        running = [j for j in self._jobs.values() if j.status in ACTIVE]
-        excess = len(self._jobs) - max(self.MAX_HISTORY, len(running))
-        if excess <= 0:
-            return
-        ordered = sorted((j for j in self._jobs.values()
-                          if j.status not in ACTIVE),
+        ordered = sorted(self._jobs.values(),
                          key=lambda j: j.created, reverse=True)
-        # самые старые завершённые уходят первыми, живые остаются
-        for stale in ordered[-excess:]:
+        keep = {j.id for j in ordered
+                if j.status in ACTIVE or j.status == "warning"}
+        dropped = 0
+        for stale in reversed(ordered):
+            if len(self._jobs) - dropped <= max(self.MAX_HISTORY, len(keep)):
+                break
+            if stale.id in keep:
+                continue
             self._jobs.pop(stale.id, None)
             self._drop_sidecar(stale.id)
+            dropped += 1
 
     def _trim_history(self) -> None:
         """Оставить не более MAX_HISTORY последних запусков."""
@@ -750,6 +762,11 @@ class JobManager:
             final = job.status
             if code == 0:
                 final = "done"
+            elif code == WARNING_EXIT and job.status == "running":
+                # стадия доработала с оговорками (книга собрана с
+                # пропущенными главами): это не ошибка, но и не зелёный
+                # done — в интерфейсе жёлтый `warning`
+                final = "warning"
             elif job.status == "running":
                 final = "failed"
             # `done` — сигнал «всё записано»: статус меняется под тем же

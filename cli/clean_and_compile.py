@@ -61,6 +61,7 @@ def _bootstrap_core() -> None:
 _bootstrap_core()
 
 from core.common import (  # noqa: E402
+    WARNING_EXIT,
     atomic_write,
     build_chapter_map as common_build_chapter_map,
     find_chapter_file as common_find_chapter_file,
@@ -331,9 +332,8 @@ def parse_yaml_meta(path):
             key, _, val = stripped.partition(':')
             key = key.strip()
             val = val.strip()
-            if val.startswith('"') and val.endswith('"'):
-                val = val[1:-1]
-            elif val.startswith("'") and val.endswith("'"):
+            if (val.startswith('"') and val.endswith('"')) or \
+                    (val.startswith("'") and val.endswith("'")):
                 val = val[1:-1]
             meta[key] = val
             current_key = key
@@ -652,7 +652,11 @@ def compile_book(mode):
     обрыв прогона не оставляет битого файла. Лог —
     logs/build_log_<mode>.txt. Финальные файлы — в корень проекта
     (cfg.out_dir); для epub/fb2 промежуточный txt НЕ пишется —
-    нативный билдер собирает книгу из памяти (chapters_data)."""
+    нативный билдер собирает книгу из памяти (chapters_data).
+
+    Возвращает код возврата: 0 — собрано всё, WARNING_EXIT — книга
+    собрана с пропущенными главами (нет папки или файла выбранного типа),
+    1 — сборка не удалась вовсе."""
     output_file = os.path.join(cfg.out_dir, output_base(ext=mode))
     try:
         os.makedirs("logs", exist_ok=True)
@@ -661,6 +665,7 @@ def compile_book(mode):
         return 1
     log_file_path = os.path.join("logs", f"build_log_{mode}.txt")
     missing_chapters = []
+    rc = 0
     chapter_map = build_chapter_map(cfg.base_dir)
     chapters_data = []
     parts = []   # тело сборки в памяти — запись атомарная одной операцией
@@ -788,19 +793,18 @@ def compile_book(mode):
         log("==========================================", out_log)
         log(f"Сборка {mode} завершена: {output_file}", out_log)
         if missing_chapters:
-            # Глава, для которой не нашлось файла выбранного типа, в книгу
-            # НЕ попала: молчаливая сборка давала книгу без части глав (в
-            # пределе — пустой файл на 0 байт) с кодом возврата 0, и web
-            # считал запуск успешным. Тип файлов выбирается в форме, и
-            # ошибка выбора (сокращённый цикл без polished, смена типа на
-            # середине книги) обязана остановить сборку, а не укоротить её.
-            # Файл НЕ пишем: частичная книга выглядит готовой.
-            log(f"ОШИБКА: ПРОПУЩЕНО ГЛАВ: {len(missing_chapters)} "
+            # Глава без папки или без файла выбранного типа в книгу не попала,
+            # но книга всё равно собирается и пишется, а запуск получает код
+            # WARNING_EXIT (web — жёлтый `warning`). Папки глав удаляют
+            # осознанно (в старой версии главами были пояснения автора) —
+            # отказ от сборки оставлял человека без книги вовсе, а код 0
+            # врал: молчаливая неполная книга выглядела готовой.
+            log(f"ПРЕДУПРЕЖДЕНИЕ: ПРОПУЩЕНО ГЛАВ: {len(missing_chapters)} "
                 f"({', '.join(missing_chapters)})", out_log)
-            log(f"Книга НЕ собрана: у {len(missing_chapters)} глав нет файла "
-                f"типа '{cfg.compile_type}'. Проверьте «Тип файлов глав».",
-                out_log)
-            return 1
+            log(f"Книга собрана без этих глав: у них нет папки или файла "
+                f"типа '{cfg.compile_type}'. Если пропуск неожидаемый — "
+                f"проверьте «Тип файлов глав».", out_log)
+            rc = WARNING_EXIT
         # txt-режимы — финальный файл; epub/fb2 — промежуточный txt
         # не нужен (книга собирается из chapters_data) — не пишем
         if mode not in ("epub", "fb2"):
@@ -820,6 +824,7 @@ def compile_book(mode):
         meta = parse_yaml_meta(cfg.epub_meta) if os.path.isfile(cfg.epub_meta) else {}
         cover = cfg.fb2_cover if cfg.fb2_inject_cover == 1 else None
         build_fb2_native(chapters_data, meta, cover, fb2_output)
+    return rc
 
 # ==========================================
 # СБОРКА ЧАСТЯМИ
@@ -828,7 +833,9 @@ def compile_chunks(mode, chunk_size):
     """Разбивка диапазона на части по chunk_size глав (chunk_size > 0).
 
     mode: 'epub' | 'txt' | 'txt-plain' | 'fb2'; каждая часть собирается
-    через compile_book (имя части — output_base текущего поддиапазона)."""
+    через compile_book (имя части — output_base текущего поддиапазона).
+    Код предупреждения по частям не копится: части собираются все, а
+    WARNING_EXIT возвращается один на прогон."""
     orig_start, orig_end = cfg.start, cfg.end
     current_start = orig_start
     try:
@@ -951,8 +958,8 @@ def main():
     else:
         rc = compile_chunks(mode, chunk_size)
     if rc:
-        # код возврата — единственный сигнал web-слою: лог скрипта успех не
-        # отменяет, а частичная книга хуже отсутствия книги
+        # код возврата — единственный сигнал web-слою (0 — всё на месте,
+        # WARNING_EXIT 3 — книга собрана с пропусками, иное — отказ)
         sys.exit(rc)
 
 

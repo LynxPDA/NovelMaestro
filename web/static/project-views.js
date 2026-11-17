@@ -4417,6 +4417,8 @@ function viewProject(section, name, tab, job) {
           clearInterval(timer);
           _reviewWatchers.delete(watchKey);
           if (job.status === "done") toast("✅ Применение завершено");
+          else if (job.status === "warning")
+            toast("⚠ Применение завершено с оговорками — смотрите лог запуска");
           else if (job.status === "failed")
             toast("❌ Применение: ошибка — смотрите лог запуска", "err");
           else if (job.status === "stopped") toast("⏹ Применение остановлено");

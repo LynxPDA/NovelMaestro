@@ -418,6 +418,20 @@ def test_on_job_finished_dry_run_is_run_not_apply(tmp_path, monkeypatch):
         hs.checkpoints(tmp_path)
 
 
+def test_on_job_finished_warning_creates_point(tmp_path, monkeypatch):
+    """`warning` — тоже точка: книга собрана с оговорками, откат нужен так же,
+    как после `done`, а без точки история молчала бы по успешной сборке."""
+    from core import settings as core_settings
+    monkeypatch.setattr(core_settings, "effective",
+                        lambda key: key == "HISTORY_ON_RUN")
+    _make_project(tmp_path, {"ner.json": "[]"})
+    hs.on_job_finished(_FakeJob(tmp_path, "compile",
+                                ["cli/clean_and_compile.py"], status="warning"))
+    top = hs.checkpoints(tmp_path)["checkpoints"][0]
+    assert top["label"] == "Запуск: Компиляция TXT/EPUB/FB2"
+    assert top["kind"] == "run"
+
+
 def test_on_job_finished_failed_job_skipped(tmp_path, monkeypatch):
     from core import settings as core_settings
     monkeypatch.setattr(core_settings, "effective",

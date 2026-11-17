@@ -59,7 +59,19 @@ test("progressParts: части строки прогресса", () => {
   assert.equal(UICore.isActive({ status: "running" }), true);
   assert.equal(UICore.isActive({ status: "done" }), false);
   assert.equal(UICore.isActive({ status: "failed" }), false);
+  assert.equal(UICore.isActive({ status: "warning" }), false);
   assert.equal(UICore.isActive(null), false);
+
+  // статус для человека: warning — «предупреждение», а не английское
+  // слово посреди русской таблицы; незнакомый статус не прячется
+  assert.equal(UICore.statusLabel("warning"), "предупреждение");
+  assert.equal(UICore.statusLabel("done"), "готово");
+  assert.equal(UICore.statusLabel("failed"), "ошибка");
+  assert.equal(UICore.statusLabel("какой-то"), "какой-то");
+  assert.equal(UICore.statusLabel(null), "");
+  // смысл предупреждения — в подсказке: работа сделана, но с оговорками
+  assert.match(UICore.statusHint("warning"), /с оговорками/);
+  assert.equal(UICore.statusHint("done"), "");
 
   // нет ни запуска, ни событий (не нашли) — пусто: «0/0 · 0%» нигде
   // мелькать не должно

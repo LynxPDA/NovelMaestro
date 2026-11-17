@@ -1915,6 +1915,27 @@
       var st = String((job && job.status) || "");
       return st === "pending" || st === "running";
     },
+    /* Текст статуса для человека. Ключ запуска (`warning`) — внутреннее
+     * имя: в интерфейсе это «предупреждение», а не английское слово
+     * посреди русской таблицы. Незнакомый статус отдаётся как есть -
+     * лучше сырое слово, чем пустая клетка. */
+    statusLabel: (status) => {
+      var st = String(status || "");
+      if (st === "warning") return "предупреждение";
+      if (st === "done") return "готово";
+      if (st === "failed") return "ошибка";
+      if (st === "stopped") return "остановлен";
+      if (st === "running") return "идёт";
+      if (st === "pending") return "подготовка";
+      return st;
+    },
+    /* Дополнение строки статуса: у warning работа сделана, но результат
+     * с оговорками (сборка без части глав) - это и есть его смысл */
+    statusHint: (status) => {
+      return String(status || "") === "warning"
+        ? "Работа выполнена, но с оговорками — подробности в логе запуска"
+        : "";
+    },
     progressPct: progressPct,
     progressParts: progressParts,
     /* ETA одного запуска: {remaining, finishAt} | null (и пишет выборку) */

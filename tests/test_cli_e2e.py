@@ -662,41 +662,83 @@ def test_cac_output_locations(cac_env):
     assert (Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_rulate.txt").is_file()
 
 
-def test_cac_missing_type_stops_build(cac_env):
-    """Пропущенная глава — ошибка сборки, а не молчаливая неполная книга.
+def test_cac_missing_type_builds_with_warning(cac_env):
+    """Пропущенная глава — сборка с предупреждением, а не отказ.
 
-    Главу, для которой нет файла выбранного типа (сокращённый цикл оставил
-    только translated/redacted, либо тип сменили на середине книги), сборка
-    раньше теряла молча: код возврата 0, книга без части глав, а при нуле
-    найденных — пустой файл на 0 байт. Web считал запуск успешным.
+    Главу без файла выбранного типа (сокращённый цикл оставил только
+    translated/redacted, тип сменили на середине книги) сборка раньше теряла
+    молча: код 0, книга без части глав и никакого сигнала человеку. Отказ
+    собирать тоже неверен: папку главы удаляют ОСОЗНАННО (в старой версии
+    главами были пояснения автора) — и человек оставался без книги вовсе.
+    Теперь книга пишется, а код возврата — WARNING_EXIT: web показывает
+    запуск жёлтым `warning`.
     """
     CAC.cfg.compile_type = "redacted"  # файлов этого типа в фикстуре нет
     rc = CAC.compile_book("txt")
-    assert rc == 1, "нет ни одной главы нужного типа — сборка обязана упасть"
-    # частичная книга не пишется: она выглядела бы готовой
+    assert rc == CAC.WARNING_EXIT
     out = Path(CAC.cfg.out_dir)
-    assert not any(out.glob("*_rulate.txt")), "пустой файл не создаётся"
+    assert (out / "Тестовая_Книга_1_2_rulate.txt").is_file(), \
+        "книга собирается даже без глав выбранного типа"
+    log = (Path("logs") / "build_log_txt.txt").read_text(encoding="utf-8")
+    assert "ПРОПУЩЕНО ГЛАВ: 2" in log
+    assert "ПРЕДУПРЕЖДЕНИЕ" in log
 
 
-def test_cac_partial_type_miss_stops_build(cac_env):
-    """Хватает одной главы без файла типа — сборка не должна «укоротиться»."""
+def test_cac_partial_type_miss_writes_warning(cac_env):
+    """Одна глава без файла типа — книга собирается, лог называет пропуск."""
     d2 = Path(CAC.cfg.base_dir) / "00000_2_x"
     (d2 / "polished.txt").unlink()
     rc = CAC.compile_book("txt")
-    assert rc == 1
+    assert rc == CAC.WARNING_EXIT
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_rulate.txt"
+    content = out.read_text(encoding="utf-8")
+    assert "Глава 1" in content and "Глава 2" not in content
+    log = (Path("logs") / "build_log_txt.txt").read_text(encoding="utf-8")
+    assert "ПРОПУЩЕНО ГЛАВ: 1" in log and "2 (нет файла)" in log
+
+
+def test_cac_removed_chapter_dir_is_warning(cac_env):
+    """Удалённая папка главы — тоже предупреждение, а не ошибка.
+
+    Это штатный случай: главами были пояснения автора, папки удалили
+    руками, а книгу собрать всё равно нужно.
+    """
+    import shutil
+    shutil.rmtree(Path(CAC.cfg.base_dir) / "00000_2_x")
+    rc = CAC.compile_book("txt")
+    assert rc == CAC.WARNING_EXIT
+    out = Path(CAC.cfg.out_dir) / "Тестовая_Книга_1_2_rulate.txt"
+    assert out.is_file()
+    log = (Path("logs") / "build_log_txt.txt").read_text(encoding="utf-8")
+    assert "2 (нет папки)" in log
+
+
+def test_cac_full_build_is_zero(cac_env):
+    """Все главы на месте — код 0: предупреждений нет."""
+    assert CAC.compile_book("txt") == 0
+
+
+def test_cac_chunks_warning_keeps_all_parts(cac_env):
+    """Части собираются все, а предупреждение — одно на прогон."""
+    d2 = Path(CAC.cfg.base_dir) / "00000_2_x"
+    (d2 / "polished.txt").unlink()
+    rc = CAC.compile_chunks("txt", 1)
+    assert rc == CAC.WARNING_EXIT
     out = Path(CAC.cfg.out_dir)
-    assert not any(out.glob("*_rulate.txt")), "книга без главы 2 не пишется"
+    assert (out / "Тестовая_Книга_1_1_rulate.txt").is_file()
+    assert (out / "Тестовая_Книга_2_2_rulate.txt").is_file(), \
+        "предупреждение одной части не отменяет остальные"
 
 
-def test_cac_main_exits_nonzero_on_missing_type(cac_env, monkeypatch):
-    """Код возврата — единственный сигнал web-слою: он обязан быть ненулевым."""
+def test_cac_main_exits_warning_code(cac_env, monkeypatch):
+    """Код возврата — единственный сигнал web-слою: 3 = предупреждение."""
     monkeypatch.setattr(sys, "argv", [
         "clean_and_compile.py", "--mode", "txt",
         "--source-type", "redacted",   # файлов этого типа нет вовсе
         "--chapters-dir", CAC.cfg.base_dir])
     with pytest.raises(SystemExit) as exc:
         CAC.main()
-    assert exc.value.code == 1
+    assert exc.value.code == CAC.WARNING_EXIT
 
 
 def test_cac_main_argparse(cac_env, monkeypatch):

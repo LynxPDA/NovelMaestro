@@ -472,10 +472,13 @@ def on_job_finished(job) -> None:
     - применение правок проверки (ner_check/translate_check_llm с --apply,
       не dry-run) — «Применение правок …» при HISTORY_ON_APPLY (дефолт вкл);
     - любой успешный запуск — «Запуск: <стадия>» при HISTORY_ON_RUN.
+    `warning` (стадия доработала с оговорками, книга записана) — тоже точка:
+    работа сделана, и откатываться к состоянию до неё человеку нужно так же,
+    как после `done`.
     Ошибки глотаются (лог): история не должна ломать отчёт о запуске.
     """
     try:
-        if getattr(job, "status", "") != "done":
+        if getattr(job, "status", "") not in ("done", "warning"):
             return
         action = str(getattr(job, "action", "") or "")
         argv = [str(a) for a in (getattr(job, "argv", None) or [])]

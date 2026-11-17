@@ -38,7 +38,9 @@ FAKE_SCRIPT = (
     "    time.sleep(0.005)\n"
     "sys.exit(0)\n"
 )
-FAKE_FAIL = "import sys\nprint('boom', flush=True)\nsys.exit(3)\n"
+FAKE_FAIL = "import sys\nprint('boom', flush=True)\nsys.exit(1)\n"
+# код предупреждения (core.common.WARNING_EXIT): работа сделана, но с оговорками
+FAKE_WARN = "import sys\nprint('собрано без 2 глав', flush=True)\nsys.exit(3)\n"
 FAKE_HANG = "import time\nprint('start', flush=True)\ntime.sleep(60)\n"
 
 # Родитель порождает потомка; потомок пишет pid и спит. Если stop убьёт
@@ -151,6 +153,7 @@ def fake_script(tmp_path):
     d.mkdir()
     (d / "ok.py").write_text(FAKE_SCRIPT, encoding="utf-8")
     (d / "fail.py").write_text(FAKE_FAIL, encoding="utf-8")
+    (d / "warn.py").write_text(FAKE_WARN, encoding="utf-8")
     (d / "hang.py").write_text(FAKE_HANG, encoding="utf-8")
     (d / "parent.py").write_text(FAKE_PARENT_CHILD, encoding="utf-8")
     (d / "progress.py").write_text(FAKE_PROGRESS, encoding="utf-8")
@@ -390,8 +393,37 @@ def test_start_failed(tmp_path, fake_script):
     job = jm.start("test", "Тест", "ACTIVE/x",
                    [str(fake_script / "fail.py")], tmp_path)
     job = _wait_status(jm, job.id, "failed")
-    assert job.exit_code == 3
+    assert job.exit_code == 1
     assert job.lines[0] == "boom"
+
+
+def test_warning_exit_is_warning_status(tmp_path, fake_script):
+    """Код WARNING_EXIT → статус `warning`, а не done и не failed.
+
+    Стадия доработала с оговорками (сборка книги без части глав): зелёный
+    done скрыл бы пропуск, красный failed объявил бы провалом готовую книгу.
+    """
+    jm = JobManager(tmp_path)
+    job = jm.start("compile", "Компиляция", "ACTIVE/x",
+                   [str(fake_script / "warn.py")], tmp_path)
+    job = _wait_status(jm, job.id, "warning")
+    assert job.status == "warning"
+    assert job.exit_code == 3
+    assert job.finished is not None
+    assert "собрано без 2 глав" in job.lines[0]
+    # статус переживает перезапуск сервера (jobs.json)
+    jm2 = JobManager(tmp_path)
+    loaded = jm2.get(job.id)
+    assert loaded is not None and loaded.status == "warning"
+
+
+def test_failed_exit_is_not_warning(tmp_path, fake_script):
+    """Любой другой ненулевой код — по-прежнему failed."""
+    jm = JobManager(tmp_path)
+    job = jm.start("test", "Тест", "ACTIVE/x",
+                   [str(fake_script / "fail.py")], tmp_path)
+    job = _wait_status(jm, job.id, "failed")
+    assert job.status == "failed" and job.exit_code == 1
 
 
 def test_dashboard_running_jobs(tmp_path, fake_script):
@@ -2620,14 +2652,39 @@ def test_jobs_trim_keeps_running(jobs_srv, fake_script):
     assert jm.get(hang.id) is not None, "работающий запуск выброшен из истории"
     assert jm.running_on("ACTIVE/Book") is not None
     assert (jm.web_dir / "job_logs" / f"{hang.id}.log").is_file()
-    # история держит лимит целиком: живой запуск не вытесняется, а старое
-    # завершённое ушло — вместе с ним и сайдкар
-    assert len(jm.list()) == JobManager.MAX_HISTORY
+    # история держит лимит: живой запуск не вытесняется (лишний сверх
+    # лимита), а старое завершённое ушло — вместе с ним и сайдкар
+    jobs = jm.list()
+    assert len(jobs) == JobManager.MAX_HISTORY
+    assert "Прочее 0" not in [j["title"] for j in jobs], "старое не вытеснено"
     gone = jm.web_dir / "job_logs"
     alive = {f"{j['id']}.log" for j in jm.list()}
     for p in gone.glob("*.log"):
         assert p.name in alive, f"сайдкар выброшенного запуска остался: {p.name}"
     jm.stop(hang.id)
+
+
+def test_jobs_trim_keeps_warning(jobs_srv):
+    """Предупреждение переживает обрезку истории.
+
+    `warning` — след сборки без части глав: жёлтый статус обязан дожить до
+    того, как его увидят. Обычные завершённые запуски при переполнении
+    истории уходят как раньше."""
+    _, _, jm = jobs_srv
+    warn = Job("compile", "Компиляция", "ACTIVE/Book", [], Path("."))
+    warn.status = "warning"
+    warn.created = 1  # самый старый в истории
+    warn.finished = 2
+    jm._jobs[warn.id] = warn
+    for i in range(JobManager.MAX_HISTORY + 2):
+        job = Job("test", f"Тест {i}", "ACTIVE/x", [], Path("."))
+        job.status = "done"
+        job.created = 100 + i
+        jm._jobs[job.id] = job
+    jm._persist()
+    titles = [j["title"] for j in jm.list()]
+    assert "Компиляция" in titles, "предупреждение выброшено обрезкой истории"
+    assert "Тест 0" not in titles, "старые завершённые уходят как раньше"
 
 
 def test_jobs_list_delete(jobs_srv):

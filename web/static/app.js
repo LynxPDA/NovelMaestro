@@ -2200,7 +2200,11 @@ async function viewDashboard() {
     const head = h(
       "div",
       { class: "active-run-head" },
-      h("span", { class: "badge badge-" + j.status }, j.status),
+      h(
+        "span",
+        { class: "badge badge-" + j.status, title: UICore.statusHint(j.status) },
+        UICore.statusLabel(j.status),
+      ),
       h(
         "a",
         {
@@ -2284,7 +2288,15 @@ async function viewDashboard() {
       },
       h("td", {}, j.title || j.action),
       h("td", { class: "ner-type" }, j.project),
-      h("td", {}, h("span", { class: "badge badge-" + j.status }, j.status)),
+      h(
+        "td",
+        {},
+        h(
+          "span",
+          { class: "badge badge-" + j.status, title: UICore.statusHint(j.status) },
+          UICore.statusLabel(j.status),
+        ),
+      ),
       h("td", {}, progressBar(j, j.progress) || "—"),
       h(
         "td",
@@ -3369,7 +3381,12 @@ function notifyFinished(ids) {
       .then((d) => {
         const j = d.job || {};
         const bad = j.status === "error" || j.status === "failed";
-        new Notification(`NovelMaestro: ${bad ? "ошибка запуска" : "готово"}`, {
+        /* warning — работа сделана, но с оговорками: своим заголовком,
+           иначе «готово» прячет то, ради чего статус и вводился */
+        const kind = bad
+          ? "ошибка запуска"
+          : j.status === "warning" ? "предупреждение" : "готово";
+        new Notification(`NovelMaestro: ${kind}`, {
           body: j.title || j.project || String(id),
           tag: `job-${id}`,
         });

@@ -343,7 +343,11 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h(
         "div",
         { class: "active-run-head" },
-        h("span", { class: "badge badge-" + j.status }, j.status),
+        h(
+          "span",
+          { class: "badge badge-" + j.status, title: UICore.statusHint(j.status) },
+          UICore.statusLabel(j.status),
+        ),
         h("span", { class: "active-run-title" }, j.title || j.action || "запуск"),
         h(
           "span",
@@ -3584,8 +3588,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h("span", { class: "spacer" }),
       h(
         "span",
-        { class: "badge badge-" + job.status },
-        job.status,
+        { class: "badge badge-" + job.status, title: UICore.statusHint(job.status) },
+        UICore.statusLabel(job.status),
       ),
     );
     if (job.status === "running") {

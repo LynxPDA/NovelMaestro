@@ -2041,6 +2041,12 @@ input[type="number"] {
   background: color-mix(in srgb, #2ecc71 20%, transparent);
   color: #2ecc71;
 }
+/* Предупреждение: работа сделана, но с оговорками (сборка без части
+   глав) — жёлтый, а не зелёный done и не красный failed. */
+.badge-warning {
+  background: color-mix(in srgb, var(--accent-2) 20%, transparent);
+  color: var(--accent-2);
+}
 .badge-failed {
   background: color-mix(in srgb, var(--danger) 20%, transparent);
   color: var(--danger);
