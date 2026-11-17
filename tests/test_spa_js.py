@@ -5,6 +5,7 @@ ui-core.js покрывается node --test (tests/spa/ui-core.test.mjs) —
 Если node отсутствует — тесты пропускаются (skip), как требует
 AGENTS.md §2 (опциональные зависимости с fallback).
 """
+import colorsys
 import re
 import shutil
 import subprocess
@@ -1143,3 +1144,50 @@ def test_run_reset_button_fits_on_mobile():
     reset = reset[:reset.index("}")]
     assert "white-space: normal" in reset, "подпись вылезет за рамку кнопки"
     assert "max-width: 100%" in reset
+
+
+def test_run_status_badges_are_distinct_colors():
+    """Статусы запуска: у каждого свой цвет, предупреждение — жёлтое.
+
+    `badge-warning` висел на «акцентном» `--accent-2` (#d29922): рядом с яркими
+    done (#2ecc71) и failed (#f85149) приглушённый янтарный в 12px прописными
+    читался серо-бурым, и человек не отличал предупреждение от нейтрального
+    бейджа. Жёлтый взят из `--ch-skip` — тем же цветом помечен пропуск главы в
+    сетке «Статуса», то есть «пропущено» и «с оговорками» в интерфейсе одного
+    цвета.
+    """
+    css = (SPA_DIR / "styles.css").read_text(encoding="utf-8")
+
+    def rule(cls):
+        start = css.index(f".{cls} {{")
+        return css[start:css.index("}", start)]
+
+    # цвет берётся из токена, а не из «акцента» и не хардкодом
+    assert "var(--warn)" in rule("badge-warning")
+    assert "accent-2" not in rule("badge-warning")
+    # жёлтый токен есть в обеих темах (тёмная ярче, светлая темнее)
+    for theme in ("", '[data-ui-theme="light"]'):
+        block = css if not theme else css[css.index(theme):]
+        assert "--warn:" in block[:block.index("}")], f"нет --warn в {theme or 'тёмной'}"
+    # оттенок предупреждения отличается от оранжевого «остановлен»: --accent-2
+    # (#d29922) и --ch-skip (#e3b341) шли под H≈40° против H≈37° у stopped —
+    # при 12px прописными разницы не видно, и бейдж читался бурым
+    def hue(hexs):
+        r, g, bl = (int(hexs[i:i + 2], 16) / 255 for i in (1, 3, 5))
+        return colorsys.rgb_to_hls(r, g, bl)[0] * 360
+
+    warn_hex = css.split("--warn:", 1)[1].split(";")[0].strip()
+    assert warn_hex.startswith("#")
+    assert hue(warn_hex) >= 48, \
+        f"предупреждение не жёлтое: {warn_hex} (H={hue(warn_hex):.0f}°)"
+    # каждый статус из JobManager раскрашен своим правилом: бейдж без правила
+    # молча берёт серый `.badge` и статус не отличается от нейтрального
+    for cls in ("badge-running", "badge-done", "badge-warning",
+                "badge-failed", "badge-stopped"):
+        assert f".{cls} {{" in css, f"нет цвета у статуса {cls}"
+    # каждый токен объявлен в обеих темах: статус не должен брать цвет
+    # из другой темы и выглядеть чужим
+    light = css[css.index('[data-ui-theme="light"]'):]
+    light = light[:light.index("}")]
+    for token in ("--warn", "--danger", "--ch-ok"):
+        assert f"{token}:" in light, f"токен {token} не задан в светлой теме"

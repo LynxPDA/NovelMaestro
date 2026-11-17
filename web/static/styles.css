@@ -17,6 +17,10 @@
   --danger: #f85149;
   --ch-ok: #3fb950;
   --ch-skip: #e3b341;
+  /* жёлтый предупреждения: --accent-2 и --ch-skip по оттенку (H≈40°)
+     совпадают с оранжевым «остановлен» (#f39c12, H≈37°) и при 12px
+     прописными читаются бурыми — у предупреждения свой, более жёлтый тон */
+  --warn: #f2d024;
   --radius: 8px;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
   --sans:
@@ -45,6 +49,8 @@
   --danger: #cf222e;
   --ch-ok: #1a7f37;
   --ch-skip: #9a6700;
+  /* на белом яркий жёлтый нечитаем: тот же смысл держит тёмный янтарный */
+  --warn: #7a5c00;
   --btn-hover: #eaeef2;
   --log-bg: #f6f8fa;
   --bg-soft: #eaeef2;
@@ -2042,10 +2048,12 @@ input[type="number"] {
   color: #2ecc71;
 }
 /* Предупреждение: работа сделана, но с оговорками (сборка без части
-   глав) — жёлтый, а не зелёный done и не красный failed. */
+   глав) — жёлтый, а не зелёный done и не красный failed. Свой токен
+   --warn, а не «акцентный» --accent-2 (#d29922): тот приглушённо-янтарный
+   и рядом с яркими done и failed читался серо-бурым. */
 .badge-warning {
-  background: color-mix(in srgb, var(--accent-2) 20%, transparent);
-  color: var(--accent-2);
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
 }
 .badge-failed {
   background: color-mix(in srgb, var(--danger) 20%, transparent);
