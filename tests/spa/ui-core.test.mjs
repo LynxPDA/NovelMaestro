@@ -69,6 +69,11 @@ test("progressParts: части строки прогресса", () => {
   assert.equal(UICore.statusLabel("failed"), "ошибка");
   assert.equal(UICore.statusLabel("какой-то"), "какой-то");
   assert.equal(UICore.statusLabel(null), "");
+  // клетки таблицы глав конвейера: события приходят ключами OK/SKIP/ERROR,
+  // и подсказка клетки обязана говорить по-русски тем же словарём
+  assert.equal(UICore.statusLabel("OK"), "выполнено");
+  assert.equal(UICore.statusLabel("SKIP"), "пропущено");
+  assert.equal(UICore.statusLabel("ERROR"), "ошибка");
   // смысл предупреждения — в подсказке: работа сделана, но с оговорками
   assert.match(UICore.statusHint("warning"), /с оговорками/);
   assert.equal(UICore.statusHint("done"), "");

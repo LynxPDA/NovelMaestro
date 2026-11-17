@@ -492,7 +492,13 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h(
         "div",
         { class: "run-panel-head" },
-        h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
+        /* ключ стадии — атрибутом, а не в тексте: «ner · Создание
+           глоссария (LLM)» человеку ни о чём не говорит (слаг нужен
+           только коду и полигону) */
+        h("div", {
+          class: "run-panel-title",
+          "data-stage": key,
+        }, spec.title),
         h("div", { class: "run-panel-tools" },
           runSaveState(key),
           resetSettingsBtn(key, spec)),
@@ -3714,7 +3720,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         row.push(
           h(
             "td",
-            { class: cls, title: `${STAGE_SHORT[stage]}: ${s || "—"}`
+            { class: cls, title: `${STAGE_SHORT[stage]}: `
+              + `${s ? UICore.statusLabel(s) : "—"}`
               + (reason ? `\n${reason}` : "") },
             s ? STATUS_SYM[s] || s : "·",
           ),
@@ -3755,7 +3762,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     /* подсказка собирается заново целиком: причина едет вместе со статусом
        (тишина сторожа, код возврата, слова-ошибки), и у повторного прогона
        успешная клетка не должна оставить причину прошлого сбоя */
-    cell.setAttribute("title", `${STAGE_SHORT[ev.stage] || ev.stage}: ${ev.status}`
+    cell.setAttribute("title", `${STAGE_SHORT[ev.stage] || ev.stage}: `
+      + `${UICore.statusLabel(ev.status)}`
       + (ev.reason ? `\n${ev.reason}` : ""));
   }
 

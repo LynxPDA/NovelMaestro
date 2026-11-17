@@ -2276,8 +2276,10 @@ async function main() {
       const sel = el.querySelector("select");
       /* панель открытой стадии — первая в правой колонке: у колонок
          «Активный запуск» такой же класс, берём свою */
-      const stage = ((document.querySelector(".run-col-form .run-panel-title")
-        || {}).textContent || "").trim().split(" ")[0];
+      /* ключ стадии — из атрибута панели, а не из её текста: в заголовке
+         теперь только название для человека */
+      const stage = (document.querySelector(".run-col-form .run-panel-title")
+        || {}).dataset?.stage || "";
       /* поле профиля — первым среди полей формы (строка «Главы» полем
          не считается и живёт перед ними) */
       const fields = [...document.querySelectorAll(".run-form .field")];
