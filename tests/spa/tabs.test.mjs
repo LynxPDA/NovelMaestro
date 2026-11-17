@@ -3580,9 +3580,7 @@ test("таблица глав: подсказка «✗» называет ПР�
   assert.ok(title.includes("тишина 9600 с"), `в подсказке причина: ${title}`);
   assert.ok(title.includes("ред"), `стадия названа: ${title}`);
 
-  /* без причины подсказка остаётся прежней — ничего не «пустеет».
-     Статус назван по-русски: ключи событий (OK/SKIP/ERROR) — внутренние
-     имена, а рядом с ними в той же подсказке стоит русская стадия */
+  /* без причины подсказка остаётся прежней — ничего не «пустеет» */
   const plain = await runView(job, [
     { type: "snapshot", lines: ["работа"], events: [], progress: null },
     { type: "event", event: { id: 1, stage: 2, status: "OK" } },
@@ -3591,7 +3589,7 @@ test("таблица глав: подсказка «✗» называет ПР�
   await settled();
   const okCell = findByClass(plain, "ch-cell").find((c) =>
     (c.className || "").includes("ch-ok"));
-  assert.equal(okCell.getAttribute("title"), "ред: выполнено");
+  assert.equal(okCell.getAttribute("title"), "ред: OK");
 });
 
 test("таблица глав: снимок стрима докрашивает клетки после обрыва", async () => {

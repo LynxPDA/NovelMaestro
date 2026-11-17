@@ -346,7 +346,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         h(
           "span",
           { class: "badge badge-" + j.status, title: UICore.statusHint(j.status) },
-          UICore.statusLabel(j.status),
+          j.status,
         ),
         h("span", { class: "active-run-title" }, j.title || j.action || "запуск"),
         h(
@@ -492,13 +492,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h(
         "div",
         { class: "run-panel-head" },
-        /* ключ стадии — атрибутом, а не в тексте: «ner · Создание
-           глоссария (LLM)» человеку ни о чём не говорит (слаг нужен
-           только коду и полигону) */
-        h("div", {
-          class: "run-panel-title",
-          "data-stage": key,
-        }, spec.title),
+        h("div", { class: "run-panel-title" }, `${key} · ${spec.title}`),
         h("div", { class: "run-panel-tools" },
           runSaveState(key),
           resetSettingsBtn(key, spec)),
@@ -3595,7 +3589,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       h(
         "span",
         { class: "badge badge-" + job.status, title: UICore.statusHint(job.status) },
-        UICore.statusLabel(job.status),
+        job.status,
       ),
     );
     if (job.status === "running") {
@@ -3720,8 +3714,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
         row.push(
           h(
             "td",
-            { class: cls, title: `${STAGE_SHORT[stage]}: `
-              + `${s ? UICore.statusLabel(s) : "—"}`
+            { class: cls, title: `${STAGE_SHORT[stage]}: ${s || "—"}`
               + (reason ? `\n${reason}` : "") },
             s ? STATUS_SYM[s] || s : "·",
           ),
@@ -3762,8 +3755,7 @@ window.viewRun = function viewRun(section, name, attachJobId) {
     /* подсказка собирается заново целиком: причина едет вместе со статусом
        (тишина сторожа, код возврата, слова-ошибки), и у повторного прогона
        успешная клетка не должна оставить причину прошлого сбоя */
-    cell.setAttribute("title", `${STAGE_SHORT[ev.stage] || ev.stage}: `
-      + `${UICore.statusLabel(ev.status)}`
+    cell.setAttribute("title", `${STAGE_SHORT[ev.stage] || ev.stage}: ${ev.status}`
       + (ev.reason ? `\n${ev.reason}` : ""));
   }
 

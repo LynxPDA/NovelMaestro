@@ -2203,7 +2203,7 @@ async function viewDashboard() {
       h(
         "span",
         { class: "badge badge-" + j.status, title: UICore.statusHint(j.status) },
-        UICore.statusLabel(j.status),
+        j.status,
       ),
       h(
         "a",
@@ -2294,7 +2294,7 @@ async function viewDashboard() {
         h(
           "span",
           { class: "badge badge-" + j.status, title: UICore.statusHint(j.status) },
-          UICore.statusLabel(j.status),
+          j.status,
         ),
       ),
       h("td", {}, progressBar(j, j.progress) || "—"),

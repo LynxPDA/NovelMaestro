@@ -62,19 +62,9 @@ test("progressParts: части строки прогресса", () => {
   assert.equal(UICore.isActive({ status: "warning" }), false);
   assert.equal(UICore.isActive(null), false);
 
-  // статус для человека: warning — «предупреждение», а не английское
-  // слово посреди русской таблицы; незнакомый статус не прячется
-  assert.equal(UICore.statusLabel("warning"), "предупреждение");
-  assert.equal(UICore.statusLabel("done"), "готово");
-  assert.equal(UICore.statusLabel("failed"), "ошибка");
-  assert.equal(UICore.statusLabel("какой-то"), "какой-то");
-  assert.equal(UICore.statusLabel(null), "");
-  // клетки таблицы глав конвейера: события приходят ключами OK/SKIP/ERROR,
-  // и подсказка клетки обязана говорить по-русски тем же словарём
-  assert.equal(UICore.statusLabel("OK"), "выполнено");
-  assert.equal(UICore.statusLabel("SKIP"), "пропущено");
-  assert.equal(UICore.statusLabel("ERROR"), "ошибка");
-  // смысл предупреждения — в подсказке: работа сделана, но с оговорками
+  // статусы в интерфейсе — ключи запуска как есть (done/failed/…), без
+  // перевода: переводов в UI нет, смысл предупреждения живёт в подсказке
+  assert.equal(UICore.statusLabel, undefined);
   assert.match(UICore.statusHint("warning"), /с оговорками/);
   assert.equal(UICore.statusHint("done"), "");
 
