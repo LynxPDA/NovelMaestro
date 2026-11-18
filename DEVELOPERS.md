@@ -143,7 +143,7 @@ Web-сервер читает `WEB_HOST`, `WEB_PORT`, `WEB_AUTH`, `WEB_TOKEN`, `
 
 Промпт стадии читается только из своего тега: файл без него — не «промпт этапа целиком» (режим убран), стадия остаётся на встроенном промпте. Встроенные промпты в скриптах (DEFAULT_*) — только fallback. В конвейере — единый «Общий промпт-файл» с тегами `<translate>/<redact>/<polish>` (`pipeline_prompt.txt` → `prompts.txt` → `translate_book_prompt.txt` при пустом поле формы).
 
-Плейсхолдеры: `{ner_block}`; `{original_text}` — входной текст (translate/polish: плейсхолдер в тексте тега обязателен, нет — предупреждение в лог, текст дописывается после промпта; redact: внутри `<source_text>`); `{translated_text}` (redact); `{female_names}`, `{male_names}` (polish: имена из ner.json по полю `translation`, пол по наличию `(female)`/`(male)` в `type`).
+Плейсхолдеры: `{ner_block}` (во всех трёх тегах: в полировке термины ищутся в `chapter.txt` рядом с входным файлом, в переводе и редактуре — в самом тексте); `{original_text}` — входной текст (translate/polish: плейсхолдер в тексте тега обязателен, нет — предупреждение в лог, текст дописывается после промпта; redact: внутри `<source_text>`); `{translated_text}` (redact). Справочника полов больше нет: `{female_names}`/`{male_names}` не подставляются, оставленный в старом файле литерал — замечание при проверке промпта.
 
 Метку поля `files` в форме стадии рисует реестр — она обязана называть то, что стадия читает (теги и переменные): `PIPELINE_PROMPT_FILE` — «теги translate/redact/polish», `NER_PROMPT_FILE` — «теги prompt_pass1/prompt_pass2» и т.п.
 

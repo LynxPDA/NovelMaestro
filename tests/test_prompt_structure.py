@@ -14,8 +14,11 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "General" / "
 DATA_PLACEHOLDERS = [
     "{original_text}", "{translated_text}", "{ner_block}", "{chunk_text}",
     "{ner_json}", "{glossary}", "{rag_block}", "{batch_text}",
-    "{female_names}", "{male_names}",
 ]
+
+# Плейсхолдеры, которые стадии больше не подставляют: оставленный в
+# шаблоне литерал ушёл бы в запрос модели вместо данных.
+STALE_PLACEHOLDERS = ["{female_names}", "{male_names}"]
 
 _SYS_RE = re.compile(r"(?ms)^[ \t]*<system>(.*?)</system>")
 
@@ -40,6 +43,15 @@ def test_pipeline_prompt_data_not_in_system():
         sys_body = _system_body(_tagged_block(text, tag))
         for ph in DATA_PLACEHOLDERS:
             assert ph not in sys_body, f"<{tag}>: {ph} в <system>"
+
+
+def test_pipeline_prompt_has_no_stale_placeholders():
+    for name in ("pipeline_prompt.txt", "ner_prompt.txt",
+                 "ner_check_prompt.txt", "translate_check_prompt.txt",
+                 "wiki_prompt.txt"):
+        text = _template_text(name)
+        for ph in STALE_PLACEHOLDERS:
+            assert ph not in text, f"{name}: устаревший плейсхолдер {ph}"
 
 
 def test_ner_prompt_data_not_in_system():

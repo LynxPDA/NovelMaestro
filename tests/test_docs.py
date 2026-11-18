@@ -44,7 +44,6 @@ CORE_API = [
     "trim_rule_left", "trim_rule_right",
     "alias_list", "ner_text", "ner_record", "load_ner_data",
     "find_relevant_ner",
-    "collect_gender_names",
     "normalize_for_search", "build_smart_regex", "extract_term_context",
     "ner_is_locked", "ner_set_locked", "ner_locked_count",
     "ner_pick_non_voted",
