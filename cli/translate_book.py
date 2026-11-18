@@ -16,13 +16,11 @@ translate_book.py — ЕДИНЫЙ скрипт LLM-обработки текс�
 
 Промпты: --prompt_file БЕЗ тегов = промпт текущего режима (файл целиком);
 с тегами <translate>/<redact>/<polish> — один файл на все режимы.
-Плейсхолдеры: {ner_block} (все режимы); {original_text} — входной текст
+Плейсхолдеры: {ner_block} (все режимы — термины глоссария, найденные
+в тексте чанка); {original_text} — входной текст
 (translate/polish: тег ОБЯЗАТЕЛЕН, нет тега — предупреждение в лог,
 текст дописывается после промпта; redact: блок «ОРИГИНАЛ»);
-{translated_text} (только redact);
-{female_names}, {male_names} — женские/мужские имена из
-ner.json (поле translation; пол по наличию (female)/(male) в type), ищутся
-в тексте чанка (основное назначение — polish).
+{translated_text} (только redact).
 
 Сервер: --host/--model/--api_key (CLI) > HOST/API_KEY/MODEL из .env
 (единая модель скрипта — без отдельных моделей под режимы).
@@ -77,7 +75,7 @@ from core.stage import (  # noqa: E402
 )
 from core import settings as core_settings  # noqa: E402
 from core.common import (
-    collect_gender_names,
+    find_chapter_file,
     find_relevant_ner,
     get_tagged_prompt,
     load_ner_data,
@@ -101,8 +99,10 @@ DEFAULT_TRANSLATE_PROMPT = """
 - Восстанавливай опущенные подлежащие по контексту, избегай
   неуместного пассивного залога.
 - Адаптируй идиомы: передавай смысл литературным русским языком.
-- Сверяйся с полом персонажей, чтобы не путать род глаголов и
-  прилагательных.
+- Согласовывай род глаголов и прилагательных с полом персонажа: пол
+  бери из глоссария (Person (male) / Person (female)); если в исходном
+  тексте пол виден явно (местоимения, обращения) и противоречит
+  глоссарию, приоритет за исходным текстом.
 - Корректно переводи номер и название главы в начале: «Глава 48. Название»
   (без названия — только «Глава 48.»).
 - Диалоги — с новой строки через длинное тире (—); прямая речь внутри
@@ -158,7 +158,8 @@ DEFAULT_REDACT_PROMPT = """
 Person (female) -> она пошла, она сказала.
 Person (male) -> он пошел, он сказал.
 Если пол не указан в словаре или указан с ошибкой, определи его по
-местоимениям (he/she) в оригинале.
+местоимениям (he/she) в оригинале. Если пол виден в оригинале явно и
+противоречит словарю — приоритет за оригиналом.
 
 # Output Format
 Верни ТОЛЬКО отредактированный текст в формате plain text (не добавляй
@@ -238,8 +239,7 @@ def save_result_ordered(fh, idx, text, original):
 # ОБРАБОТКА ОДНОГО ЧАНКА
 # ══════════════════════════════════════════════════════════════════════
 def build_user_content(mode, prompt, original_text, draft_text,
-                       ner_block, female_block, male_block,
-                       logger=None):
+                       ner_block, logger=None):
     """user_content режима: плейсхолдеры промпта → значения.
 
     translate/polish: {original_text} — обязательный тег-переменная;
@@ -247,10 +247,7 @@ def build_user_content(mode, prompt, original_text, draft_text,
     после промпта, чтобы перевод не сломался. Используется и в
     предпросмотре запроса (--preview-request)."""
     def _sub(s):
-        return (s
-                .replace("{ner_block}", ner_block)
-                .replace("{female_names}", female_block)
-                .replace("{male_names}", male_block))
+        return s.replace("{ner_block}", ner_block)
     if mode == "redact":
         return (_sub(prompt)
                 .replace("{original_text}", original_text)
@@ -267,31 +264,29 @@ def build_user_content(mode, prompt, original_text, draft_text,
 
 def process_item(internal_id, original_text, draft_text, ctx):
     """original_text — текст для поиска NER/словаря и (в translate/polish)
-    вход; draft_text — черновик (только redact)."""
-    ner_block, ner_count = find_relevant_ner(
-        original_text, ctx["ner_data"], ctx["ner_threshold"],
-        ctx["ner_ngram"], ctx["ner_fields"],
-        automaton=ctx["automaton"],
-        min_count=ctx.get("ner_min_count", 0),
-    )
-    # Имена по полу (по translation; основное назначение — polish).
-    # В redact вход — оригинал на исходном языке, списки будут пустыми.
-    female, male = collect_gender_names(
-        original_text, ctx["ner_data"],
-        ctx["ner_threshold"], ctx["ner_ngram"],
-        min_count=ctx.get("names_min_count", 0))
-    female_block = "\n".join(female) if female else "(нет)"
-    male_block = "\n".join(male) if male else "(нет)"
+    вход; draft_text — черновик (только redact).
 
+    В полировке глоссарий собирается по ОРИГИНАЛУ главы (chapter.txt):
+    поиск идёт по term, а в переводе их нет. Нет оригинала — ищем по
+    входному тексту, как в остальных режимах."""
+    if ctx.get("ner_source") is not None:
+        ner_block = ctx["ner_source"][0]
+        ner_count = ctx["ner_source"][1]
+    else:
+        ner_block, ner_count = find_relevant_ner(
+            original_text, ctx["ner_data"], ctx["ner_threshold"],
+            ctx["ner_ngram"], ctx["ner_fields"],
+            automaton=ctx["automaton"],
+            min_count=ctx.get("ner_min_count", 0),
+        )
     user_content = build_user_content(
         ctx["mode"], ctx["prompt"], original_text, draft_text,
-        ner_block, female_block, male_block, logger=ctx["logger"])
+        ner_block, logger=ctx["logger"])
     text, err = ctx["stage"].complete(
         user_content, label=f"[{ctx['mode']} chunk {internal_id}]",
     )
     if text is not None:
-        return internal_id, text, (f"Chunk {internal_id} OK | NER: {ner_count}"
-                                   f" | Имена Ж/М: {len(female)}/{len(male)}")
+        return internal_id, text, f"Chunk {internal_id} OK | NER: {ner_count}"
 
     if ctx["mode"] == "redact":
         fb = (f"\n\n[ОШИБКА РЕДАКТУРЫ: {err}]\n\n"
@@ -323,14 +318,12 @@ def build_parser():
 Промпт-файл:
   без тегов  = промпт текущего режима (файл целиком);
   с тегами   <translate>/<redact>/<polish> — один файл на все режимы.
-  Плейсхолдеры: {ner_block} (все режимы),
+  Плейсхолдеры: {ner_block} (все режимы — термины глоссария,
+                найденные в тексте чанка),
                 {original_text} — входной текст (translate/polish: тег
                   ОБЯЗАТЕЛЕН, нет — предупреждение в лог, текст
                   дописывается после промпта; redact: блок «ОРИГИНАЛ»),
-                {translated_text} (только redact),
-                {female_names}, {male_names} — женские/мужские имена из
-                ner.json (translation; пол по (female)/(male) в type; без term)
-                для справочника полов в polish.
+                {translated_text} (только redact).
 
 Единицы:
   --chunk_size — ТОКЕНЫ (оценка estimate_tokens);
@@ -364,11 +357,8 @@ def build_parser():
                         "в NER-блок (алиасы — при включении aliases; порядок "
                         "в блоке — term, aliases, type, translation).")
     p.add_argument("--ner_min_count", type=int, default=0,
-                   help="Минимальный count термина для {ner_block}: термины "
-                        "с count ниже отфильтровываются (0 — выключено).")
-    p.add_argument("--names_min_count", type=int, default=10,
-                   help="Минимальный count термина для {female_names}/"
-                        "{male_names}: имена с count ниже отфильтровываются "
+                   help="Минимальный count термина для {ner_block} (все "
+                        "режимы): термины с count ниже отфильтровываются "
                         "(0 — выключено).")
     # Промпт
     p.add_argument("--prompt_file", default=None,
@@ -451,8 +441,7 @@ def main(argv=None):
         logger.error("❌ CRITICAL: NER data is empty! Check ner.json path and format.")
     else:
         logger.info(f"✅ NER Data loaded successfully. Terms count: {len(ner_data)}")
-    logger.info(f"📋 Пороги count: ner_block={args.ner_min_count}, "
-                f"имена={args.names_min_count}")
+    logger.info(f"📋 Порог count для {{ner_block}}: {args.ner_min_count}")
 
     # ── Промпт ──
     custom = load_prompt(args.prompt_file, logger) if args.prompt_file else None
@@ -522,6 +511,34 @@ def main(argv=None):
             return 1
         items = [(i, c, None) for i, c in enumerate(chunks)]
 
+    # ── Глоссарий полировки — по ОРИГИНАЛУ главы ──
+    # В переводе терминов глоссария может не быть вовсе (они там уже
+    # переведены), поэтому записи ищутся в chapter.txt рядом с входным
+    # файлом. Файла нет (полировка чужой сборки) — ищем по входному
+    # тексту, как в остальных режимах.
+    ner_source = None
+    if mode == "polish":
+        chapter_path, _warn = find_chapter_file(
+            os.path.dirname(os.path.abspath(args.file)) or ".", 0,
+            want="chapter", strict_types=True)
+        if chapter_path:
+            try:
+                with open(chapter_path, encoding="utf-8") as f:
+                    chapter_text = f.read()
+            except OSError as exc:
+                logger.warning("⚠️ Оригинал главы не прочитан (%s): "
+                               "глоссарий ищется по входному тексту", exc)
+            else:
+                ner_source = find_relevant_ner(
+                    chapter_text, ner_data, args.ner_threshold,
+                    args.ner_ngram, args.ner_fields, automaton=automaton,
+                    min_count=args.ner_min_count)
+                logger.info("📖 Глоссарий по оригиналу %s: терминов %d",
+                            os.path.basename(chapter_path), ner_source[1])
+        else:
+            logger.info("ℹ️ chapter.txt рядом нет — глоссарий по входному "
+                        "тексту")
+
     # ── Предпросмотр запроса (--preview-request): эмуляция ПЕРВОГО
     # LLM-запроса без сети; до создания trace/выходного файла ──
     if args.preview_request:
@@ -534,22 +551,17 @@ def main(argv=None):
             orig0, ner_data, args.ner_threshold, args.ner_ngram,
             args.ner_fields, automaton=automaton,
             min_count=args.ner_min_count)
+        if mode == "polish" and ner_source is not None:
+            nb, nb_count = ner_source
         if mode == "redact" and nb == "[]":
             nb = "(Нет специфических терминов)"
-        fem, mal = collect_gender_names(
-            orig0, ner_data, args.ner_threshold, args.ner_ngram,
-            min_count=args.names_min_count)
         user_content = build_user_content(
-            mode, active_prompt, orig0, draft0, nb,
-            "\n".join(fem) if fem else "(нет)",
-            "\n".join(mal) if mal else "(нет)", logger=log)
+            mode, active_prompt, orig0, draft0, nb, logger=log)
         meta = {
                 "mode": mode,
                 "chunks": len(items),
                 "chunk_size": args.chunk_size,
                 "ner_terms": nb_count,
-                "female_names": len(fem),
-                "male_names": len(mal),
                 "request_chars": len(user_content),
                 "prompt_file": args.prompt_file or "",
                 "prompt_source": "внешний" if custom else "встроенный",
@@ -575,7 +587,7 @@ def main(argv=None):
         "ner_threshold": args.ner_threshold, "ner_ngram": args.ner_ngram,
         "ner_fields": args.ner_fields,
         "ner_min_count": args.ner_min_count,
-        "names_min_count": args.names_min_count,
+        "ner_source": ner_source,
         "prompt": active_prompt, "stage": stage,
         "logger": logger,
     }

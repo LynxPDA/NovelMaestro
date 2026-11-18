@@ -1459,7 +1459,8 @@ window.viewRun = function viewRun(section, name, attachJobId) {
   // (без них блок теряет смысл); aliases — включён по умолчанию, но
   // отключаемый (алиасы в блоке не всем нужны). Список полей — как в
   // ner_check: базовые всегда, остальные — ключи из реальных данных
-  // ner.json проекта
+  // ner.json проекта. Блок есть в запросе каждой стадии конвейера,
+  // включая полировку
   function nerBlockChips(key) {
     const FIELD_ORDER = ["type", "translation", "aliases", "pinyin",
       "reading", "context", "translated_context", "notes"];
@@ -2516,8 +2517,9 @@ window.viewRun = function viewRun(section, name, attachJobId) {
       const idx = nmWrap ? fieldNodes.indexOf(nmWrap) : -1;
       if (idx >= 0) fieldNodes.splice(idx + 1, 0, nb.bar, nb.box);
       nb.loadFields();
-      // чипсы следуют за своим скрытым полем: в чистой полировке (действия
-      // 3 и 4) блок глоссария не используется
+      // чипсы следуют за своим скрытым полем: глоссарий в запросе всех
+      // типов работы — термины ищутся в тексте главы (в полировке —
+      // в chapter.txt), поэтому режим его не отключает
       modeVis.mirror(nb.bar, "ner_fields");
       modeVis.mirror(nb.box, "ner_fields");
     }

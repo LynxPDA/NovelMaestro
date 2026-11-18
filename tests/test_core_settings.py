@@ -852,11 +852,20 @@ def _by_name(stage: str) -> dict:
 
 
 def test_applies_when(global_env):
-    """when — условие по полю режима из самой формы; пустой режим не режет."""
-    f = _by_name("pipeline")["names_min_count"]
+    """when — условие по полю режима из самой формы; пустой режим не режет.
+
+    Порог глоссария у конвейера больше не привязан к режиму: {ner_block}
+    есть в запросе всех типов работы, включая полировку, поэтому поле
+    видно всегда — условие проверяем на поле, где оно осталось."""
+    f = _by_name("pipeline")["chunk_size"]
+    assert S.applies(f, {"action": "1"}) is True      # перевод
     assert S.applies(f, {"action": "3"}) is True      # полировка
-    assert S.applies(f, {"action": "1"}) is False     # чистый перевод
+    assert S.applies(f, {"action": "2"}) is False     # редактура — глава целиком
     assert S.applies(f, {}) is True                   # режим не выбран
+    # порог глоссария — общий для всех типов работы
+    mc = _by_name("pipeline")["ner_min_count"]
+    for action in ("1", "2", "3", "4", "5", "6", "7", "8"):
+        assert S.applies(mc, {"action": action}) is True, action
 
 
 def test_applies_when_any(global_env):

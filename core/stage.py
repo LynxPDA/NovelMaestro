@@ -519,7 +519,7 @@ def add_check_prompt_arg(ap: argparse.ArgumentParser) -> None:
 
 def check_prompt(args: argparse.Namespace, name: str, contract,
                  json_tags=(), *, file_attr: str = "prompt_file",
-                 marks=()) -> bool:
+                 marks=(), stale=()) -> bool:
     """Режим --check-prompt: вердикт о промпт-файле стадии, до LLM не доходит.
 
     contract — записи (тег, где читается, (переменные,)), json_tags — служебные
@@ -528,6 +528,8 @@ def check_prompt(args: argparse.Namespace, name: str, contract,
     marks — пары (фраза, пояснение): без такой фразы промпт устарел по
     смыслу (теги и переменные на месте, а правил нового режима нет); такие
     фразы попадают в notes — замечанием не считаются, стадия работает.
+    stale — пары (имя плейсхолдера, почему он больше не подставляется):
+    оставленный в файле плейсхолдер — замечание (в запрос уходит литерал).
     True — режим выполнен, main() возвращает 0."""
     path = getattr(args, "check_prompt", None)
     if not path:
@@ -543,7 +545,7 @@ def check_prompt(args: argparse.Namespace, name: str, contract,
                   "Проверка не выполнена, файл не тронут.", path)
         return True
     res = prompt_check_result(name, str(getattr(args, file_attr, "") or ""),
-                              contract, json_tags, marks)
+                              contract, json_tags, marks, stale)
     write_prompt_check(path, res)
     if res["problems"]:
         for line in res["problems"]:

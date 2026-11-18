@@ -287,8 +287,16 @@ PROMPT_CONTRACT: tuple = (
     ("translate", "тип работы «Перевод»", ("original_text", "ner_block")),
     ("redact", "тип работы «Редактура»",
      ("original_text", "translated_text", "ner_block")),
-    ("polish", "тип работы «Полировка»",
-     ("original_text", "female_names", "male_names")),
+    ("polish", "тип работы «Полировка»", ("original_text", "ner_block")),
+)
+#: плейсхолдеры, которых стадия больше не подставляет: они остались в старых
+#: файлах, и без этой сверки проверка молчала бы, а в запрос ушёл бы
+#: литерал «{female_names}». Замечание, а не молчание: файл надо обновить
+_PROMPT_STALE_TAGS: tuple = (
+    ("female_names", "справочник полов убран: пол берётся из глоссария "
+     "и исходного текста"),
+    ("male_names", "справочник полов убран: пол берётся из глоссария "
+     "и исходного текста"),
 )
 
 
@@ -324,7 +332,6 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
                     stream_timeout=None, max_retries=None,
                     threads: int = 1, prompt_file: str = "",
                     ner_min_count: int = 0,
-                    names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
                     chunk_size: int | None = None) -> list[str]:
     # модель, сервер и ключ конвейера — одни на все стадии (translate,
@@ -351,11 +358,12 @@ def build_stage_cmd(stage: int, script: Path, in_file: Path, out_file: Path,
     # общий промпт-файл — только если задан (пусто = встроенный)
     if prompt_file:
         common += ["--prompt_file", prompt_file]
-    # пороги count: ner_block и имена (дефолты: 0 — выключено, 10);
+    # порог count глоссария (дефолт 0 — выключено) — один на все стадии:
+    # {ner_block} есть и в полировке (термины ищутся в chapter.txt),
+    # поэтому своей настройки у имён больше нет;
     # поля {ner_block} — выбор из формы: aliases в блок попадают только
     # когда поле выбрано в чипсах формы
     common += ["--ner_min_count", str(ner_min_count),
-               "--names_min_count", str(names_min_count),
                "--ner_fields", str(ner_fields)]
     # размер чанка перевода/полировки (ТОКЕНЫ): форма > дефолт
     # (_DEFAULTS["chunk_size"] ← PIPELINE_CHUNK_SIZE из .env);
@@ -451,7 +459,6 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                     prompts: dict[int, str] | None = None,
                     polish_in: str | None = None,
                     ner_min_count: int = 0,
-                    names_min_count: int = 10,
                     ner_fields: str = "term,translation,type",
                     chunk_size: int | None = None,
                     stage_timeout: float | None = None) -> bool:
@@ -548,7 +555,6 @@ def process_chapter(chapter_id: int, dirs: list[Path], script: Path,
                                   threads,
                                   prompt_file=(prompts or {}).get(stage) or "",
                                   ner_min_count=ner_min_count,
-                                  names_min_count=names_min_count,
                                   ner_fields=ner_fields,
                                   chunk_size=chunk_size)
             proc_env = dict(os.environ)
@@ -695,10 +701,7 @@ def main() -> None:
                          "(пусто = авто: кандидат с тегами из prompts/)")
     ap.add_argument("--ner_min_count", type=int, default=0,
                     help="Минимальный count термина для {ner_block} "
-                         "(0 — выключено).")
-    ap.add_argument("--names_min_count", type=int, default=10,
-                    help="Минимальный count термина для {female_names}/"
-                         "{male_names} (0 — выключено).")
+                         "(все стадии; 0 — выключено).")
     ap.add_argument("--ner_fields", default="term,translation,type",
                     help="Поля термина в {ner_block} через запятую "
                          "(алиасы — при включении aliases; порядок в блоке — "
@@ -722,7 +725,8 @@ def main() -> None:
     if args.check_prompt:
         auto = resolve_prompt_paths(args.prompt_file)
         args.prompt_file = args.prompt_file or auto.get(1, "")
-    if check_prompt(args, "pipeline", PROMPT_CONTRACT):
+    if check_prompt(args, "pipeline", PROMPT_CONTRACT,
+                    stale=_PROMPT_STALE_TAGS):
         return
 
 
@@ -871,7 +875,6 @@ def main() -> None:
             args.max_retries, 1,
             prompt_file=prompts.get(stage) or "",
             ner_min_count=args.ner_min_count,
-            names_min_count=args.names_min_count,
             ner_fields=args.ner_fields,
             chunk_size=args.chunk_size)
         cmd += ["--preview-request", args.preview_request]
@@ -946,7 +949,6 @@ def main() -> None:
                         threads, prompts,
                         polish_in=action_spec.get("polish_input"),
                         ner_min_count=args.ner_min_count,
-                        names_min_count=args.names_min_count,
                         ner_fields=args.ner_fields,
                                     chunk_size=args.chunk_size,
                         stage_timeout=stage_limit): cid

@@ -1250,66 +1250,6 @@ def find_relevant_ner(text, ner_data, threshold, ngram_size, ner_fields,
     return json.dumps(entries, ensure_ascii=False, indent=2), len(entries)
 
 
-def _gender_of_type(type_str) -> str:
-    """Пол по полю type: наличие '(female)'/'(male)' (регистр не важен).
-    Скобки исключают ложное вхождение 'male' внутри 'female'.
-    Возвращает 'female' / 'male' / '' (пола нет)."""
-    t = ner_text(type_str).lower()
-    if "(female)" in t:
-        return "female"
-    if "(male)" in t:
-        return "male"
-    return ""
-
-
-def collect_gender_names(text, ner_data, threshold=0.75, ngram_size=3,
-                         min_count=0):
-    """Поиск в тексте имён из ner.json ПО ПОЛЮ translation (русское
-    написание; term не используется). Пол — по наличию '(female)'/'(male)'
-    в поле type (Person/Creature/составные типы; '(unknown)' — без пола).
-    Возвращает (female, male) — списки translation найденных записей:
-    дедупликация по нормализованному написанию, сортировка
-    count desc → алфавит. min_count — порог поля count (0 — выключен).
-    Пустой вход → ([], [])."""
-    if not text or not ner_data:
-        return [], []
-    text_norm = normalize_for_search(text)
-    if not text_norm:
-        return [], []
-    text_ngrams = get_ngrams(text_norm, n=ngram_size)
-    buckets: dict = {"female": [], "male": []}
-    seen: set = set()
-    for item in ner_data:
-        trans = ner_text(item.get("translation")).strip()
-        if not trans:
-            continue
-        gender = _gender_of_type(item.get("type"))
-        if not gender:
-            continue
-        t_norm = item.get("_translation_norm")
-        if t_norm is None:
-            t_norm = normalize_for_search(trans)
-        if not t_norm or t_norm in seen:
-            continue
-        ngrams = item.get("_ngrams_translation")
-        if ngrams is None:
-            ngrams = get_ngrams(t_norm, n=ngram_size) if len(t_norm) >= 3 else set()
-        if not _fuzzy_hit(t_norm, ngrams, text_norm, text_ngrams, threshold):
-            continue
-        if min_count and _int_count(item.get("count")) < min_count:
-            continue
-        seen.add(t_norm)
-        buckets[gender].append(item)
-
-    def _key(it):
-        return (-_int_count(it.get("count")),
-                ner_text(it.get("translation")).strip().lower())
-
-    return tuple([ner_text(it.get("translation")).strip()
-                  for it in sorted(buckets[g], key=_key)]
-                 for g in ("female", "male"))
-
-
 # ══════════════════════════════════════════════════════════════════════
 # NER-CHECK: фильтры/формат/батчи глоссария + правки LLM (JSON-патчи)
 # и review-файл для человека (статусы принять/отклонить, накопление
@@ -2775,7 +2715,7 @@ PROMPT_CHECK_FILE = os.path.join("tmp", "prompt_check.json")
 
 
 def prompt_check_result(name: str, prompt_file: str, contract,
-                        json_tags=(), marks=()) -> dict:
+                        json_tags=(), marks=(), stale=()) -> dict:
     """Сверка промпт-файла стадии с её контрактом (--check-prompt).
 
     contract — записи (тег, где читается, (имена переменных, ...));
@@ -2784,7 +2724,9 @@ def prompt_check_result(name: str, prompt_file: str, contract,
     режимы. Промпт стадии читается только из своего тега, поэтому файл без
     тегов — проблема, а не «промпт целиком». `marks` — пары (фраза, пояснение):
     без такой фразы промпт устарел по смыслу (правил нового режима в нём
-    нет), это уходит в notes. Возвращает
+    нет), это уходит в notes. `stale` — пары (имя плейсхолдера, почему он
+    больше не подставляется): оставленный в файле плейсхолдер — проблема,
+    а не молчание: подстановки нет, и литерал уходит модели. Возвращает
     {stage, file, state (none|missing|empty|file), tags, problems, notes,
     mtime}; в сеть не ходит, читает только сам файл."""
     res: dict = {"stage": name, "file": prompt_file or "", "state": "file",
@@ -2839,6 +2781,13 @@ def prompt_check_result(name: str, prompt_file: str, contract,
     for mark, hint in marks or ():
         if mark not in text:
             res["notes"].append(hint)
+    # stale — плейсхолдер, который стадия уже не подставляет: теги и
+    # переменные на месте, а литерал уходит модели вместо данных
+    for var, why in stale or ():
+        if "{" + var + "}" in text:
+            res["problems"].append(
+                f"плейсхолдер {{{var}}} больше не подставляется ({why}) — "
+                f"уберите его из промпта")
     return res
 
 

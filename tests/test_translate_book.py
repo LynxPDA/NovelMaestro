@@ -286,10 +286,13 @@ def test_main_broken_utf8_input(tmp_path, monkeypatch, caplog):
     assert not (tmp_path / "polished.txt").exists()
 
 
-def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
-    """polish: {female_names}/{male_names} подставляются из ner.json
-    (translation + (female)/(male) в type; без term), литералы не утекают."""
+def test_main_polish_gets_ner_block(tmp_path, monkeypatch):
+    """polish: {ner_block} собирается по chapter.txt (термины глоссария,
+    найденные в ОРИГИНАЛЕ этой главы), поля — из --ner_fields; литералы
+    плейсхолдеров в запрос не утекают."""
     monkeypatch.chdir(tmp_path)
+    (tmp_path / "chapter.txt").write_text(
+        "廖停雁看见了苏星宇。白虎吼叫。", encoding="utf-8")
     (tmp_path / "redacted.txt").write_text(
         "Ляо Тинъянь увидела Су Синюя. Байху рычал.", encoding="utf-8")
     (tmp_path / "ner.json").write_text(json.dumps([
@@ -299,9 +302,11 @@ def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
          "type": "Person (male)", "count": 10},
         {"term": "白虎", "translation": "Байху", "type": "Creature",
          "count": 99},
+        {"term": "未出现", "translation": "Не в тексте",
+         "type": "Person (male)", "count": 50},
     ], ensure_ascii=False), encoding="utf-8")
     (tmp_path / "prompt.txt").write_text(
-        "<polish>\nЖ:\n{female_names}\nМ:\n{male_names}\n</polish>",
+        "<polish>\nГ: {ner_block}\n{original_text}\n</polish>",
         encoding="utf-8")
     captured = {}
 
@@ -316,30 +321,29 @@ def test_main_polish_gender_placeholders(tmp_path, monkeypatch):
     out = (tmp_path / "polished_book.txt").read_text(encoding="utf-8")
     assert out == "ОТПОЛИРОВАНО\n"
     content = captured["content"]
+    assert "{ner_block}" not in content
     prompt_part = content.split("\n\n")[0]  # до входного текста чанка
-    assert "{female_names}" not in content
-    assert "{male_names}" not in content
-    assert "Ж:\nЛяо Тинъянь\nМ:" in prompt_part      # женский список
-    assert "Су Синюй" in prompt_part.split("М:")[1]   # мужской список
-    assert "Байху" not in prompt_part                 # без пола — не имя
-    # term (китайский) не попадает
-    assert "廖停雁" not in prompt_part and "苏星宇" not in prompt_part
+    # найдены в chapter.txt: term → translation, type, aliases по выбору
+    assert "Ляо Тинъянь" in prompt_part and "Су Синюй" in prompt_part
+    assert "廖停雁" in prompt_part           # term — всегда в блоке
+    # термин, которого нет в оригинале главы, в блок не попал
+    assert "Не в тексте" not in prompt_part
+    # сам текст полировки — русский перевод, а не оригинал
+    assert "Ляо Тинъянь увидела Су Синюя" in content
 
 
-def test_main_polish_min_count_filters_names(tmp_path, monkeypatch):
-    """--names_min_count: имена с count ниже порога не попадают
-    в {female_names}/{male_names} (по умолчанию 10)."""
+def test_main_polish_ner_block_without_chapter(tmp_path, monkeypatch):
+    """polish без chapter.txt: глоссарий ищется по переданному тексту
+    (полировка из перевода — запасной вариант), стадия не падает."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "redacted.txt").write_text(
-        "Ляо Тинъянь увидела Су Синюя.", encoding="utf-8")
+    (tmp_path / "translated.txt").write_text(
+        "Су Синюй вошёл в зал.", encoding="utf-8")
     (tmp_path / "ner.json").write_text(json.dumps([
-        {"term": "廖停雁", "translation": "Ляо Тинъянь",
-         "type": "Person (female)", "count": 5},
         {"term": "苏星宇", "translation": "Су Синюй",
          "type": "Person (male)", "count": 10},
     ], ensure_ascii=False), encoding="utf-8")
     (tmp_path / "prompt.txt").write_text(
-        "<polish>\nЖ:\n{female_names}\nМ:\n{male_names}\n</polish>",
+        "<polish>\nГ: {ner_block}\n{original_text}\n</polish>",
         encoding="utf-8")
     captured = {}
 
@@ -349,20 +353,9 @@ def test_main_polish_min_count_filters_names(tmp_path, monkeypatch):
 
     monkeypatch.setattr(core_stage, "stream_chat_completion", fake_stream)
     monkeypatch.setattr(core_stage, "determine_model", lambda *a, **k: "модель-х")
-    TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
-             "--prompt_file", "prompt.txt", "--threads", "1"])
-    content = captured["content"]
-    prompt_part = content.split("\n\n")[0]
-    assert "Ж:\n(нет)\nМ:\nСу Синюй" in prompt_part  # 5 < 10 — отсечена
-    assert "Ляо Тинъянь" not in prompt_part
-    # порог 0 — все имена попадают
-    captured.clear()
-    TB.main(["redacted.txt", "--mode", "polish", "--host", "http://h",
-             "--prompt_file", "prompt.txt", "--threads", "1",
-             "--names_min_count", "0"])
-    content2 = captured["content"]
-    prompt_part2 = content2.split("\n\n")[0]
-    assert "Ж:\nЛяо Тинъянь\nМ:\nСу Синюй" in prompt_part2
+    assert TB.main(["translated.txt", "--mode", "polish", "--host", "http://h",
+                    "--prompt_file", "prompt.txt", "--threads", "1"]) is None
+    assert "Су Синюй" in captured["content"]
 
 
 def test_main_translate_original_text_placeholder(tmp_path, monkeypatch):
@@ -435,14 +428,12 @@ def test_main_translate_no_placeholder_warns_and_appends(tmp_path, monkeypatch):
 def test_build_user_content_modes():
     """build_user_content: redact — все плейсхолдеры; translate — тег
     {original_text} заменяется ровно один раз."""
-    p = ("G:{ner_block} F:{female_names} M:{male_names} "
-         "O:{original_text} T:{translated_text}")
-    out = TB.build_user_content("redact", p, "ориг", "черн", "[]", "Ф", "М")
+    p = "G:{ner_block} O:{original_text} T:{translated_text}"
+    out = TB.build_user_content("redact", p, "ориг", "черн", "[]")
     assert "G:[]" in out and "O:ориг" in out and "T:черн" in out
-    assert "F:Ф" in out and "M:М" in out
     # translate: {translated_text} не входит в промпт, тег заменён
     out = TB.build_user_content("translate", "П:{original_text}",
-                                "текст", None, "[]", "(нет)", "(нет)")
+                                "текст", None, "[]")
     assert out == "П:текст"
     assert "{original_text}" not in out
 
@@ -451,8 +442,7 @@ def test_build_user_content_missing_tag_appends(monkeypatch):
     """translate без {original_text}: текст дописан после промпта;
     предупреждение — один раз на режим (без логгера — без побочных)."""
     monkeypatch.setattr(TB, "_warned_missing_text_tag", set())
-    out = TB.build_user_content("translate", "ПРОМПТ", "ТЕКСТ", None,
-                                "[]", "ф", "м")
+    out = TB.build_user_content("translate", "ПРОМПТ", "ТЕКСТ", None, "[]")
     assert out.startswith("ПРОМПТ") and out.endswith("ТЕКСТ")
 
 

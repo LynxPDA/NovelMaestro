@@ -258,13 +258,11 @@ def build_pipeline(form: dict, ctx: dict) -> list[str]:
     argv += _range_argv(form)
     # потоки — общие (--threads из _llm_argv): распределение на главы/чанки
     # считает сам pipeline.py
-    # пороги count: ner_block и имена (пусто/0 = фильтр выключен);
-    # поля {ner_block} — чипсы формы (hidden ner_fields), общие для
-    # всех стадий конвейера
-    for flag, name in (("--ner_min_count", "ner_min_count"),
-                       ("--names_min_count", "names_min_count")):
-        if form.get(name) not in (None, ""):
-            argv += [flag, str(form[name])]
+    # порог count глоссария (пусто/0 = фильтр выключен) — один на все
+    # стадии конвейера: {ner_block} есть и в полировке (термины ищутся
+    # в chapter.txt); поля {ner_block} — чипсы формы (hidden ner_fields)
+    if form.get("ner_min_count") not in (None, ""):
+        argv += ["--ner_min_count", str(form["ner_min_count"])]
     nf = str(form.get("ner_fields") or "").strip()
     if nf:
         argv += ["--ner_fields", nf]

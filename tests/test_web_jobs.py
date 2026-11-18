@@ -1540,18 +1540,22 @@ def test_pipeline_has_no_request_budget():
 def test_build_command_keeps_only_mode_fields():
     """Значения полей чужого режима браузер помнит, но в argv они не едут:
     фильтр — core.settings.applicable_form, а не память формы."""
+    # в редактуре глава идёт целиком — размера чанка в argv нет
     argv = build_command("pipeline",
-                         {"action": "3", "names_min_count": "10",
-                          "ner_fields": "term,translation"}, {})
-    assert "--ner_fields" not in argv
-    assert "--names_min_count" in argv
-    # поля глоссария касаются только тех типов работы, где он в запросе
+                         {"action": "2", "chunk_size": "4000"}, {})
+    assert "--chunk_size" not in argv
     argv2 = build_command("pipeline",
-                          {"action": "3", "ner_min_count": "5"}, {})
-    assert "--ner_min_count" not in argv2
-    argv3 = build_command("pipeline",
-                          {"action": "1", "ner_min_count": "5"}, {})
-    assert "--ner_min_count" in argv3
+                          {"action": "1", "chunk_size": "4000"}, {})
+    assert "--chunk_size" in argv2
+    # порог глоссария — общий для всех типов работы: {ner_block} есть и
+    # в полировке (термины ищутся в chapter.txt), поэтому он в argv всегда
+    for action in ("1", "3", "8"):
+        argv3 = build_command("pipeline",
+                              {"action": action, "ner_min_count": "5"}, {})
+        assert "--ner_min_count" in argv3, action
+    # своей настройки у имён больше нет
+    argv4 = build_command("pipeline", {"action": "3"}, {})
+    assert "--names_min_count" not in argv4
 
 
 def _norm(v):

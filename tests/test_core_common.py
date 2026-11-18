@@ -1022,8 +1022,8 @@ def test_load_and_find_ner(tmp_path):
     assert cnt == 0 and s == "[]"
 
 
-def test_collect_gender_names_string_count(tmp_path):
-    """count-строки в ner.json не ломают сортировку имён (регрессия
+def test_find_relevant_ner_string_count(tmp_path):
+    """count-строки в ner.json не ломают поиск и порог (регрессия
     артефакта [FAIL: bad operand type for unary -: 'str'])."""
     ner = [
         {"term": "陈阳", "translation": "Чэнь Ян",
@@ -1040,11 +1040,7 @@ def test_collect_gender_names_string_count(tmp_path):
     by_term = {d["term"]: d["count"] for d in data}
     assert by_term["陈阳"] == 5 and by_term["白虎"] == 50
     assert by_term["苏星宇"] == 0
-    # сортировка по -count не падает (был TypeError со строкой)
-    female, male = C.collect_gender_names(
-        "Чэнь Ян и Су Синюй", data, 0.7, 3)
-    assert "Чэнь Ян" in male and "Су Синюй" in male
-    # find_relevant_ner с порогом тоже терпит строки
+    # find_relevant_ner с порогом терпит строки
     s, cnt = C.find_relevant_ner("白虎", data, 0.7, 3,
                                  "term,translation,type",
                                  automaton=automaton, min_count=10)
@@ -1170,11 +1166,10 @@ def test_ner_fields_normalized_on_load(tmp_path):
     assert first["_votes_type"] == {}, "голоса-строка — пустые голоса"
     assert second["translation"] == "а, б", "список склеивается через запятую"
     assert "aliases" not in second, "объект в aliases — мусор, не имена"
-    # поиск, пол и промпт-запись на таких данных работают
+    # поиск и промпт-запись на таких данных работают
     C.find_relevant_ner("Текст Т", data, 0.7, 3, "term,type",
                         automaton=automaton)
-    assert C.collect_gender_names("Т", [{"term": "Т", "translation": "Т",
-                                         "type": 5}]) == ([], [])
+    assert C.find_relevant_ner("Т", data, 0.7, 3, "term", min_count=0)
     assert C.format_ner_record(first)["term"] == "123"
 
 
@@ -1363,106 +1358,6 @@ def test_find_relevant_ner_block_field_order(tmp_path):
                                "translation,aliases,term",
                                automaton=automaton)
     assert list(json.loads(s)[0]) == ["term", "aliases", "translation"]
-
-
-# ══════════════════════════════════════════════════════════════════════
-# collect_gender_names (имена по полу для polish)
-# ══════════════════════════════════════════════════════════════════════
-_GENDER_SAMPLE = [
-    {"term": "廖停雁", "translation": "Ляо Тинъянь",
-     "type": "Person (female)", "count": 5},
-    {"term": "苏星宇", "translation": "Су Синюй",
-     "type": "Person (male)", "count": 10},
-    {"term": "萧炎", "translation": "Сяо Янь",
-     "type": "Person (male)", "count": 2},
-    {"term": "灵儿", "translation": "Линъэр", "type": "Creature (female)"},
-    {"term": "龙爷", "translation": "Лун Е", "type": "Creature (male)"},
-    {"term": "苏星宇2", "translation": "Су Синюй",
-     "type": "Person (male)", "count": 1},          # дубль перевода
-    {"term": "白虎", "translation": "Байху", "type": "Creature (unknown)"},
-    {"term": "张三", "translation": "Чжан Сань", "type": "Person (unknown)"},
-    {"term": "李四", "type": "Person (male)"},            # нет translation
-    {"term": "王五", "translation": "Ван У", "type": "Person"},  # нет пола
-    {"term": "赵六", "translation": "Чжао Лю",
-     "type": "Title / Person (male)"},                # составной тип
-]
-
-_GENDER_TEXT = ("Ляо Тинъянь увидела Су Синюя. Сяо Янь и Линъэр шли рядом. "
-                "Лун Е, Чжао Лю, Байху и Чжан Сань остались позади. "
-                "Ван У тоже был там.")
-
-
-def _gender_data(tmp_path):
-    p = tmp_path / "ner.json"
-    p.write_text(json.dumps(_GENDER_SAMPLE, ensure_ascii=False),
-                 encoding="utf-8")
-    return str(p)
-
-
-def test_load_ner_data_precomputes_translation_norm(tmp_path):
-    data, _ = C.load_ner_data(_gender_data(tmp_path), 3, SilentLog())
-    by_term = {d["term"]: d for d in data}
-    assert by_term["廖停雁"]["_translation_norm"] == "ляотинъянь"
-    assert by_term["廖停雁"]["_ngrams_translation"]
-    # нет translation → пустая норма
-    assert by_term["李四"]["_translation_norm"] == ""
-
-
-def test_collect_gender_names_basic(tmp_path):
-    data, _ = C.load_ner_data(_gender_data(tmp_path), 3, SilentLog())
-    female, male = C.collect_gender_names(_GENDER_TEXT, data, 0.75, 3)
-    # женские: Person (female) + Creature (female), без unknown
-    assert female == ["Ляо Тинъянь", "Линъэр"]
-    # мужские: count desc, дубль убран, Байху/Чжан Сань (unknown) не попали
-    assert male == ["Су Синюй", "Сяо Янь", "Лун Е", "Чжао Лю"]
-    assert "Байху" not in female + male
-    assert "Ван У" not in female + male
-
-
-@pytest.mark.parametrize("type_str, expected", [
-    ("Person (female)", "female"),
-    ("PERSON (FEMALE)", "female"),    # регистр не важен
-    ("Creature (female)", "female"),
-    ("Person (male)", "male"),
-    ("Creature (male)", "male"),
-    ("Title / Person (male)", "male"),
-    ("Person (unknown)", ""),
-    ("Person", ""),
-    ("female", ""),                    # без скобок — не пол
-    ("male", ""),
-    ("", ""),
-    (None, ""),
-])
-def test_gender_of_type(type_str, expected):
-    """Пол — только по '(female)'/'(male)': скобки убирают ложное
-    вхождение 'male' внутри 'female'."""
-    assert C._gender_of_type(type_str) == expected
-
-
-def test_collect_gender_names_case_and_inflection(tmp_path):
-    data, _ = C.load_ner_data(_gender_data(tmp_path), 3, SilentLog())
-    # другой регистр + лишние пробелы
-    female, male = C.collect_gender_names("ляо  тинъянь пришла", data, 0.75, 3)
-    assert female == ["Ляо Тинъянь"] and male == []
-    # склонённая форма (нет точного вхождения) — нечёткий матчинг
-    female, male = C.collect_gender_names("Сяо Яня ранили", data, 0.75, 3)
-    assert male == ["Сяо Янь"]
-
-
-def test_collect_gender_names_raw_items_without_precompute():
-    """Работает и без load_ner_data (нет предвычисленных _translation_norm)."""
-    female, male = C.collect_gender_names(
-        "Су Синюй победил", [
-            {"term": "苏星宇", "translation": "Су Синюй", "type": "Person (male)"},
-        ], 0.75, 3)
-    assert female == [] and male == ["Су Синюй"]
-
-
-@pytest.mark.parametrize("text, data", [(_GENDER_TEXT, []), ("", []),
-                                         ("", _GENDER_SAMPLE),
-                                         (None, _GENDER_SAMPLE)])
-def test_collect_gender_names_empty(text, data):
-    assert C.collect_gender_names(text, data, 0.75, 3) == ([], [])
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2543,6 +2438,27 @@ def test_prompt_check_json_tags_notes_and_breakage(tmp_path):
     assert res["problems"] == [] and res["notes"] == []
     assert set(res["tags"]) == {"prompt_wiki_article", "wiki_markers",
                                 "wiki_type_order"}
+
+
+def test_prompt_check_stale_placeholders_are_problems(tmp_path):
+    """Плейсхолдер, который стадия больше не подставляет, — проблема, а не
+    молчание: подстановки нет, и литерал уходит в запрос модели."""
+    contract = (("polish", "полировка", ("original_text", "ner_block")),)
+    stale = (("female_names", "справочник полов убран"),
+             ("male_names", "справочник полов убран"))
+    f = tmp_path / "p.txt"
+    f.write_text("<polish>\nЖ:\n{female_names}\n{original_text}\n"
+                 "{ner_block}\n</polish>\n", encoding="utf-8")
+    res = C.prompt_check_result("pipeline", str(f), contract, stale=stale)
+    assert len(res["problems"]) == 1
+    assert "{female_names}" in res["problems"][0]
+    # male_names в файле нет — о нём и замечания нет
+    assert not any("{male_names}" in p for p in res["problems"])
+    # чистый файл — ни одного замечания
+    f.write_text("<polish>\n{original_text}\n{ner_block}\n</polish>\n",
+                 encoding="utf-8")
+    assert C.prompt_check_result("pipeline", str(f), contract,
+                                 stale=stale)["problems"] == []
 
 
 def test_write_prompt_check_writes_readable_json(tmp_path):
